@@ -5,3 +5,4 @@
 .DS_Store
 *.Rproj*
 no_git/
+*.Rproj
