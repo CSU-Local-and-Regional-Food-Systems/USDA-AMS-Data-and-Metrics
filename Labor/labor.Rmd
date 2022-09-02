@@ -1,0 +1,523 @@
+---
+title: "labor_updated"
+author: "Allie Bauman"
+date: '2022-08-19'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this file we get all of the data associated with the labor 2-pager. All data is from the U.S. Bureau of Labor Statistics Quarterly Census of Employment and Wages, 2021. 
+
+https://www.bls.gov/cew/downloadable-data-files.htm
+
+NAICS codes of interest include: 
+  * Crop Production 111
+  * Animal Production 112
+  * Fishing, Hunting, and Trapping 114 
+  * Support Activities for Crop and Animal Production 115
+  * Food manufacturing 311 
+  * Animal Food Processing 3111
+  * Grain and Oilseed Milling 3112
+  * Sugar and Confectionery Product Manufacturing 3113
+  * Fruit and Vegetable Preserving and Specialty Food Manufacturing 3114
+  * Dairy Product Manufacturing 3115
+  * Animal Slaughtering and Processing 3116
+  * Seafood Product Preparation and Packaging 3117 
+  * Bakeries and Tortilla Manufacturing (except Retail Bakeries) 3118
+  * Other Food Manufacturing 3119
+  * Beverage Manufacturing 3121
+  * Tobacco Manufacturing 3122
+  * Pesticide and Other Agricultural Chemical Manufacturing 32532 
+  * Agricultural Implement Manufacturing 33311 
+  * Grocery and Related Product Merchant Wholesalers 4244
+  * Farm Product Raw Materials, Merchant Wholesalers 4245
+  * Beer, Wine, and Distilled Alcoholic Beverage Merchant Wholesalers 4248 
+  * Farm Supplies, Merchant Wholesalers 42491
+  * Truck Transportation 484
+  * Warehousing and Storage 493 
+  * Food and Beverage Stores 445
+  * Grocery Stores 4451 
+  * Specialty Food Stores 4452
+  * Beer, Wine, and Liquor Stores 4453
+  * Supermarkets and other grocery stores 44511 
+  * Convenience stores 44512 
+  * Retail Bakeries 311811 
+  * Food Service and Drinking Places 722
+  * Special Food Services 7223
+  * Drinking Places (Alcoholic Beverages) 7224
+  * Restaurants and Other Eating Places 7225
+  * Full service restaurants 722511 
+  * Caterers 722320 
+  * Mobile food services 722330 
+  
+
+I put all relevant NAICS codes into one folder and import all contents of the folder and bind into one data frame. 
+
+We compute data for the following
+
+  * privately held businesses (own_title == "Private")
+  * all establishment sizes (size_code==0)
+  * annual data (qtr=="A")
+  * remove data with disclosure, otherwise they are included in the data as a zero, we want NA
+  * remove area fips starting with "C" as these are for MSA's
+
+```{r}
+library(tidyverse)
+library(janitor)
+
+# Import and bind all NAICS codes of interest
+data_path <- "data/QCEW/food"
+
+files <- dir(data_path, pattern = "*.csv")
+labor <- files %>% 
+  map(~read_csv(file.path(data_path, .))) %>%
+  reduce(bind_rows) %>% clean_names() 
+
+# Separate fips so we can identify state level data
+labor <- labor %>% separate(area_fips, 
+                             c("state_fips", "county_fips"),
+                             sep = 2,
+                             remove = FALSE)
+
+# Select data of interest
+labor <- labor %>% filter(own_title=="Private" & size_code==0 & is.na(disclosure_code) &
+                            qtr=="A" & !str_detect(area_fips, "^C")) %>% select(
+                              area_fips, state_fips, county_fips, year, 
+                              industry_code, industry_title, 
+                              total_annual_wages, annual_avg_emplvl, 
+                              annual_avg_estabs_count, annual_avg_wkly_wage, lq_annual_avg_emplvl)
+
+rm(data_path, files)
+```
+
+## Wages (in thousands) for relevant NAICS codes 
+
+```{r}
+
+# Select wage data 
+wages <- labor %>% select(area_fips, state_fips, county_fips, year, 
+                          industry_code, industry_title, total_annual_wages)
+  
+# Combine NAICS and variable name, add category and topic area
+wages <- wages %>% mutate(
+  variable_name = "total_annual_wages", 
+  category = "Labor", 
+  topic_area = "Wages") %>% unite(
+    "variable_name", c(variable_name, industry_title)) %>% rename(
+      value = total_annual_wages)
+
+# Change state level FIPS codes to be 2 digits so are consistent with the rest of the data 
+wages <- wages %>% mutate(
+  fips = case_when(
+    county_fips =="000" & state_fips!="US" ~ state_fips, 
+    county_fips !="000"  ~ area_fips,
+    state_fips=="US" ~ "00")) %>% select(
+      fips, topic_area, category, year, variable_name, value)
+
+```
+
+## Annual average of monthly employment levels for a given year
+
+```{r}
+
+# Select employment data
+employment <- labor %>% select(area_fips, state_fips, county_fips, year, 
+                          industry_code, industry_title, annual_avg_emplvl)
+  
+# Combine NAICS and variable name, add category and topic area
+employment <- employment %>% mutate(
+  variable_name = "annual_avg_emplvl", 
+  category = "Labor", 
+  topic_area = "Employment") %>% unite(
+    "variable_name", c(variable_name, industry_title)) %>% rename(
+      value = annual_avg_emplvl)
+
+# Change state level FIPS codes to be 2 digits so are consistent with the rest of the data 
+employment <- employment %>% mutate(
+  fips = case_when(
+    county_fips =="000" & state_fips!="US" ~ state_fips, 
+    county_fips !="000"  ~ area_fips,
+    state_fips=="US" ~ "00")) %>% select(
+      fips, topic_area, category, year, variable_name, value)
+
+```
+
+## Annual average of quarterly establishment counts for a given year
+
+```{r}
+
+# Select employment data
+establishments <- labor %>% select(area_fips, state_fips, county_fips, year, 
+                          industry_code, industry_title, annual_avg_estabs_count)
+  
+# Combine NAICS and variable name, add category and topic area
+establishments <- establishments %>% mutate(
+  variable_name = "annual_avg_estabs_count", 
+  category = "Labor", 
+  topic_area = "Employment") %>% unite(
+    "variable_name", c(variable_name, industry_title)) %>% rename(
+      value = annual_avg_estabs_count)
+
+# Change state level FIPS codes to be 2 digits so are consistent with the rest of the data 
+establishments <- establishments %>% mutate(
+  fips = case_when(
+    county_fips =="000" & state_fips!="US" ~ state_fips, 
+    county_fips !="000"  ~ area_fips,
+    state_fips=="US" ~ "00")) %>% select(
+      fips, topic_area, category, year, variable_name, value)
+
+```
+
+## Average weekly wage based on the 12-monthly employment levels and total annual wage levels.
+
+```{r}
+
+# Select employment data
+weekly_wage <- labor %>% select(area_fips, state_fips, county_fips, year, 
+                          industry_code, industry_title, annual_avg_wkly_wage)
+  
+# Combine NAICS and variable name, add category and topic area
+weekly_wage <- weekly_wage %>% mutate(
+  variable_name = "annual_avg_wkly_wage", 
+  category = "Labor", 
+  topic_area = "Wages") %>% unite(
+    "variable_name", c(variable_name, industry_title)) %>% rename(
+      value = annual_avg_wkly_wage)
+
+# Change state level FIPS codes to be 2 digits so are consistent with the rest of the data 
+weekly_wage <- weekly_wage %>% mutate(
+  fips = case_when(
+    county_fips =="000" & state_fips!="US" ~ state_fips, 
+    county_fips !="000"  ~ area_fips,
+    state_fips=="US" ~ "00")) %>% select(
+      fips, topic_area, category, year, variable_name, value)
+
+```
+
+## Location quotient
+
+There are different ways to define location quotient. We use location quotient of annual average employment relative to the U.S. (Rounded to the hundredths place). This is the same metric as used by IMPLAN. 
+
+```{r}
+
+# Select lq data
+lq <- labor %>% select(area_fips, state_fips, county_fips, year, 
+                          industry_code, industry_title, lq_annual_avg_emplvl)
+  
+# Combine NAICS and variable name, add category and topic area
+lq <- lq %>% mutate(
+  variable_name = "lq_annual_avg_emplvl", 
+  category = "Labor", 
+  topic_area = "Employment") %>% unite(
+    "variable_name", c(variable_name, industry_title)) %>% rename(
+      value = lq_annual_avg_emplvl)
+
+# Change state level FIPS codes to be 2 digits so are consistent with the rest of the data 
+lq <- lq %>% mutate(
+  fips = case_when(
+    county_fips =="000" & state_fips!="US" ~ state_fips, 
+    county_fips !="000"  ~ area_fips,
+    state_fips=="US" ~ "00")) %>% select(
+      fips, topic_area, category, year, variable_name, value)
+
+```
+
+## Combine all data into one data frame 
+
+We remove data without a county name. The QCEW data has some fips codes called Oversees locations, Multicounty, out-of-state, and unknown or undefined. These fips codes do not have a match in the more county-level fips codes, so we drop all observations without a county name in order to drop these observations. 
+
+```{r}
+library(tidycensus)
+
+# Get county and state fips, state name, county name 
+county <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), sep = "", remove = FALSE) %>% rename(county_name = county) %>% select(fips, county_name, state_name)
+
+state <- tidycensus::fips_codes %>% select(state_code, state_name) %>% 
+  rename(fips = state_code, 
+         state_name1 = state_name) %>% distinct()
+
+# Bind wages, employment, establishments, weekly_wage data
+labor <- bind_rows(wages, employment, establishments, weekly_wage, lq) %>% 
+  left_join(county) %>% left_join(state)
+
+# Coalesce state and county names so state name is present in all rows
+labor <- labor %>% mutate(
+    state_name = coalesce(labor$state_name, labor$state_name1)) %>% select(
+      fips, county_name, state_name, category, topic_area, year, variable_name, value) %>% 
+  filter(!(is.na(county_name) & is.na(state_name)))
+
+# make year a character vector to be consistent with other data sets
+labor$year <- as.character(labor$year)
+
+rm(wages, employment, establishments, weekly_wage, lq)
+```
+
+# Sex by occupation 
+
+Data from U.S.Census Bureau American Community Survey Table, B24010, SEX BY OCCUPATION FOR THE CIVILIAN EMPLOYED POPULATION 16 YEARS AND OVER, 2019 1-year estimate.
+
+https://data.census.gov/cedsci/table?q=B24010
+
+Variables include 
+
+  * B24010_011E	Estimate!!Total:!!Male:!!Management, business, science, and arts occupations:!!Management, business, and financial occupations:!!Management occupations:!!Farmers, ranchers, and other agricultural managers
+  * B24010_076E	Estimate!!Total:!!Male:!!Service occupations:!!Food preparation and serving related occupations:
+  * B24010_113E	Estimate!!Total:!!Male:!!Natural resources, construction, and maintenance occupations:!!Farming, fishing, and forestry occupations:
+  * B24010_162E	Estimate!!Total:!!Female:!!Management, business, science, and arts occupations:!!Management, business, and financial occupations:!!Management occupations:!!Farmers, ranchers, and other agricultural managers
+  * B24010_227E	Estimate!!Total:!!Female:!!Service occupations:!!Food preparation and serving related occupations:
+  * B24010_264E	Estimate!!Total:!!Female:!!Natural resources, construction, and maintenance occupations:!!Farming, fishing, and forestry occupations:
+  
+```{r}
+
+# Import metadata
+var_defs_gender <- read_csv("data/ACS/ACSDT1Y2019.B24010-Column-Metadata.csv") %>%
+  clean_names() %>% filter(
+  str_detect(label, "^Estimate!!") & 
+    (str_detect(label, "!!Farmers, ranchers, and other agricultural managers$") | 
+    str_detect(label, "!!Food preparation and serving related occupations:$") | 
+    str_detect(label, "!!Farming, fishing, and forestry occupations:$")))
+
+write_csv(var_defs_gender, "data/ACS/var_defs_gender.csv")
+rm(var_defs_gender)
+
+
+# Import and bind all NAICS codes of interest
+data_path <- "data/ACS/gender_data"
+
+files <- dir(data_path, pattern = "*.csv")
+gender <- files %>% 
+  map(~read_csv(file.path(data_path, .)) %>% slice(-1)) %>%
+  reduce(bind_rows) 
+
+# Import data and keep columns of interest, get fips from GEO_ID
+gender <- gender %>% select(
+  GEO_ID, NAME,
+  B24010_011E, B24010_076E, B24010_113E, 
+  B24010_162E, B24010_227E, B24010_264E) %>% mutate(
+    fips = case_when(
+      	str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+        str_detect(GEO_ID, "0100000") ~ "US", 
+        str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# Rename data and add columns to match other data
+gender <- gender %>%  rename(
+  number_male_farmers_ranchers_ag_managers = B24010_011E, 
+  number_male_food_preparation_serving_occupations = B24010_076E, 
+  number_male_farming_fishing_forestry_occupations = B24010_113E, 
+  number_female_farmers_ranchers_ag_managers = B24010_162E, 
+  number_female_food_preparation_serving_occupations = B24010_227E, 
+  number_female_farming_fishing_forestry_occupations = B24010_264E) %>% select(-GEO_ID)
+
+# Pivot longer
+gender <- gender %>% pivot_longer(
+  cols = -c(fips, NAME), 
+  names_to = "variable_name", 
+  values_to = "value")
+  
+# Add in state/county and variables and put in correct order
+gender <- gender %>% left_join(county) %>% mutate(
+  category = "Labor", 
+  topic_area = "Employment", 
+  year = "2019") %>% mutate(
+    state_name = coalesce(NAME, state_name), 
+    state_name = ifelse(state_name=="United States", NA, state_name)) %>%
+  
+  select(
+    fips, county_name, state_name, category, topic_area, year, variable_name, value)
+
+# Replace "NULL" with missing and drop missing rows and make numeric
+gender <- gender %>% mutate(
+  value = ifelse(value=="null", NA, value)) %>% filter(
+    !is.na(value))
+
+gender$value <- as.numeric(gender$value)
+
+```
+
+# Median earnings by sector and gender 
+
+We use 2020 5-Year Estimates data from the U.S. Census Bureau, American Community Survey, S2411  OCCUPATION BY SEX AND MEDIAN EARNINGS IN THE PAST 12 MONTHS (IN 2020 INFLATION-ADJUSTED DOLLARS) FOR THE CIVILIAN EMPLOYED POPULATION 16 YEARS AND OVER
+
+https://data.census.gov/cedsci/table?q=S2411%3A%20OCCUPATION%20BY%20SEX%20AND%20MEDIAN%20EARNINGS%20IN%20THE%20PAST%2012%20MONTHS%20%28IN%202019%20INFLATION-ADJUSTED%20DOLLARS%29%20FOR%20THE%20CIVILIAN%20EMPLOYED%20POPULATION%2016%20YEARS%20AND%20OVER&g=0100000US,%240500000&y=2020&tid=ACSST5Y2020.S2411
+
+Data notes: there are some observations with a + at the end or - at the beginning, making them non-numeric. This will not work with the rest of the data. We remove the +/- sign from these numbers and convert the value column to numeric. 
+
+We include two industries: 
+
+* Food preparation and serving related occupations 
+* Farming, fishing, and forestry occupations 
+
+We include median earning for men, women and women's earnings as a percent of men's earnings. 
+
+Variables include: 
+
+  * S2411_C02_023E	Estimate!!Median earnings (dollars) for male!!Civilian employed population 16 years and over with earnings!!Service occupations:!!Food preparation and serving related occupations
+  * S2411_C02_030E	Estimate!!Median earnings (dollars) for male!!Civilian employed population 16 years and over with earnings!!Natural resources, construction, and maintenance occupations:!!Farming, fishing, and forestry occupations
+  * S2411_C03_023E	Estimate!!Median earnings (dollars) for female!!Civilian employed population 16 years and over with earnings!!Service occupations:!!Food preparation and serving related occupations
+  * S2411_C03_030E	Estimate!!Median earnings (dollars) for female!!Civilian employed population 16 years and over with earnings!!Natural resources, construction, and maintenance occupations:!!Farming, fishing, and forestry occupations
+  * S2411_C04_023E	Estimate!!Women's earnings as a percentage of men's earning!!Civilian employed population 16 years and over with earnings!!Service occupations:!!Food preparation and serving related occupations
+  * S2411_C04_030E	Estimate!!Women's earnings as a percentage of men's earning!!Civilian employed population 16 years and over with earnings!!Natural resources, construction, and maintenance occupations:!!Farming, fishing, and forestry occupations
+
+```{r}
+
+# Import metadata - only have columns of interest
+var_defs_earnings <- read_csv("data/ACS/ACSST5Y2020.S2411-Column-Metadata.csv") %>% 
+  clean_names() %>% filter(
+  str_detect(label, "^Estimate!!") &    
+  (str_detect(label, "!!Food preparation and serving related occupations$") | 
+     str_detect(label, "!!Farming, fishing, and forestry occupations$")))
+
+write_csv(var_defs_earnings, "data/ACS/var_defs_earnings.csv")
+rm(var_defs_earnings)
+
+# Import and bind all NAICS codes of interest
+data_path <- "data/ACS/median_income_data"
+
+files <- dir(data_path, pattern = "*.csv")
+earnings <- files %>% 
+  map(~read_csv(file.path(data_path, .)) %>% slice(-1)) %>%
+  reduce(bind_rows) 
+
+# Import data and keep columns of interest, get fips from GEO_ID
+earnings <- earnings %>% select(
+  GEO_ID, NAME,
+  S2411_C02_023E, S2411_C02_030E, S2411_C03_023E, 
+  S2411_C03_030E, S2411_C04_023E, S2411_C04_030E) %>% mutate(
+    fips = case_when(
+      	str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
+        str_detect(GEO_ID, "0100000") ~ "US", 
+        str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
+
+# Rename data and add columns to match other data
+earnings <- earnings %>%  rename(
+  median_earnings_male_food_preparation_serving = S2411_C02_023E, 
+  median_earnings_male_farming_fishing =  S2411_C02_030E, 
+  median_earnings_female_food_preparation_serving = S2411_C03_023E, 
+  median_earnings_female_farming_fishing = S2411_C03_030E, 
+  median_earnings_female_percent_male_food_preparation_serving = S2411_C04_023E, 
+  median_earnings_female_percent_male_farming_fishing = S2411_C04_030E) %>% select(-GEO_ID)
+
+# Pivot longer
+earnings <- earnings %>% pivot_longer(
+  cols = -c(fips, NAME), 
+  names_to = "variable_name", 
+  values_to = "value")
+  
+# Add in state/county and variables and put in correct order
+earnings <- earnings %>% left_join(county) %>% mutate(
+  category = "Labor", 
+  topic_area = "Wages", 
+  year = "2020") %>% mutate(
+    state_name = coalesce(NAME, state_name), 
+    state_name = ifelse(state_name=="United States", NA, state_name)) %>% select(
+    fips, county_name, state_name, category, topic_area, year, variable_name, value)
+
+# Replace "-" with missing and drop missing rows
+earnings <- earnings %>% mutate(
+  value = ifelse(value=="-", NA, value)) %>% filter(
+    !is.na(value))
+
+# Remove "+" and "," from 250,000+ and convert value to numeric
+earnings <- earnings %>% mutate(
+  value = ifelse(value=="250,000+", 250000, value), 
+  value = ifelse(value=="2,500-", 2500, value))
+
+earnings$value <- as.numeric(earnings$value)
+
+```
+
+## Farm labor
+Download U.S. county-level data from the 2017 Census of Agriculture using the Census Data Query Tool. 
+
+https://www.nass.usda.gov/Publications/AgCensus/2017/index.php
+
+Note that this data set it too large to store on GitHub, so the only files that are stored are those relevant to this analysis. Farm labor data is available in Census Volume 1, Chapter 2: County level data, Table 7: Hired farm labor. 
+
+County - fips 02010 ALEUTIAN ISLANDS is not a fips code found in the other data sets. 
+
+```{r}
+
+# Import data and keep data of interest only
+# Only run this if you download the full data file from the Census website
+#farm_labor <- coa_17 <- read_tsv("data/2017_cdqt_data.txt") %>% clean_names() %>% filter(
+#  census_chapter==2 & census_table==7 & 
+#    (census_row==2 | census_row == 51 | census_row ==55)) 
+
+#write_csv(farm_labor, "data/farm_labor.csv")
+
+# Manipulate data so we can add state/county names
+read_csv("data/farm_labor.csv")
+farm_labor <- farm_labor %>% select(
+  state_fips_code, county_code, state_name, short_desc, value) %>% unite(
+    "fips", state_fips_code:county_code, sep = "", remove = FALSE) %>% mutate(
+      fips = ifelse(county_code=="NULL", NA, fips)) %>% mutate(
+      fips = coalesce(fips,state_fips_code), 
+      fips = ifelse(fips=="99", "US", fips)) 
+
+# Import county data, remove state name
+county <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), sep = "", remove = FALSE) %>% rename(county_name = county) %>% select(fips, county_name)
+
+# Use state name from NASS data, but make lower case to match other state name data
+farm_labor <- farm_labor %>% left_join(county, by = "fips") %>% mutate(
+  state_name = tools::toTitleCase(tolower(state_name)),
+  state_name = ifelse(fips=="US", NA, state_name)) 
+
+# Change national fips code to be "US" to match with other data sets, rename variables, add new columns and keep only what we need
+farm_labor <- farm_labor %>% mutate(
+  variable_name = case_when(
+    short_desc=="LABOR, HIRED - NUMBER OF WORKERS" ~ "hired_labor_number_workers", 
+    short_desc=="LABOR, MIGRANT - NUMBER OF WORKERS" ~ "migrant_labor_number_workers", 
+    short_desc=="LABOR, UNPAID - NUMBER OF WORKERS" ~ "unpaid_labor_number_workers"), 
+  category = "Labor", 
+  topic_area = "Employment", 
+  year = "2017") %>% select(
+    fips, county_name, state_name, category, topic_area, year, variable_name, value)
+    
+```
+
+## Join all labor data and write metadata file
+
+```{r}
+
+# Join data and write data file
+labor <- bind_rows(labor, gender, earnings, farm_labor)
+
+write_csv(labor, "labor.csv")
+
+# Write metadata file
+metadata <- labor %>% distinct(variable_name, .keep_all = TRUE) %>% select(category, topic_area, variable_name)
+
+# Add columns
+metadata <- metadata %>% mutate(
+  `2 pager title` = "Labor", 
+  user_friendly_variable_name = case_when(
+    str_detect(variable_name, "^total_annual_wages") | 
+      str_detect(variable_name, "^median_earnings") | 
+      str_detect(variable_name, "^number_") ~ variable_name,
+    str_detect(variable_name, "^annual_avg_emplvl") ~ 
+      str_replace_all(variable_name, 
+                      pattern = "^annual_avg_emplvl", 
+                      replacement = "annual_average_employment_level"),
+    str_detect(variable_name, "^annual_avg_estabs_count") ~ 
+      str_replace_all(variable_name, 
+                      pattern = "^annual_avg_estabs_count", 
+                      replacement = "number_of_establishments"), 
+    str_detect(variable_name, "^annual_avg_wkly_wage") ~ 
+      str_replace_all(variable_name, 
+                      pattern = "^annual_avg_wkly_wage", 
+                      replacement = "average_weekly_wage"), 
+    str_detect(variable_name, "^lq_annual_avg_emplvl") ~
+      str_replace_all(variable_name, 
+                      pattern = "^lq_annual_avg_emplvl", 
+                      replacement = "location_quotient"),
+    str_detect(variable_name, "number_workers$") ~ 
+      str_replace_all(variable_name, 
+                      pattern = "number_workers$", 
+                      replacement = "number_of_workers"))) %>% 
+  select(`2 pager title`, everything())
+
+write_csv(metadata, "metadata_labor1.csv")
+```
