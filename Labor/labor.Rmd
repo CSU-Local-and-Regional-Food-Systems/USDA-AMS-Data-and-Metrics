@@ -53,7 +53,6 @@ NAICS codes of interest include:
   * Caterers 722320 
   * Mobile food services 722330 
   
-
 I put all relevant NAICS codes into one folder and import all contents of the folder and bind into one data frame. 
 
 We compute data for the following
@@ -73,7 +72,7 @@ data_path <- "data/QCEW/food"
 
 files <- dir(data_path, pattern = "*.csv")
 labor <- files %>% 
-  map(~read_csv(file.path(data_path, .))) %>%
+  map(~read_csv(file.path(data_path, .), show_col_types = FALSE)) %>%
   reduce(bind_rows) %>% clean_names() 
 
 # Separate fips so we can identify state level data
@@ -269,72 +268,86 @@ Variables include
   * B24010_162E	Estimate!!Total:!!Female:!!Management, business, science, and arts occupations:!!Management, business, and financial occupations:!!Management occupations:!!Farmers, ranchers, and other agricultural managers
   * B24010_227E	Estimate!!Total:!!Female:!!Service occupations:!!Food preparation and serving related occupations:
   * B24010_264E	Estimate!!Total:!!Female:!!Natural resources, construction, and maintenance occupations:!!Farming, fishing, and forestry occupations:
-  
+
+
+Note: a few Colorado counties appear in the data twice and contain the same information. We drop duplicate entries. 
+
 ```{r}
 
 # Import metadata
-var_defs_gender <- read_csv("data/ACS/ACSDT1Y2019.B24010-Column-Metadata.csv") %>%
-  clean_names() %>% filter(
+var_defs_gender <- read_csv(
+  "data/ACS/ACSDT1Y2019.B24010-Column-Metadata.csv", 
+  show_col_types = FALSE) %>% clean_names() %>% filter(
   str_detect(label, "^Estimate!!") & 
     (str_detect(label, "!!Farmers, ranchers, and other agricultural managers$") | 
     str_detect(label, "!!Food preparation and serving related occupations:$") | 
     str_detect(label, "!!Farming, fishing, and forestry occupations:$")))
 
-write_csv(var_defs_gender, "data/ACS/var_defs_gender.csv")
-rm(var_defs_gender)
+var_defs_gender <- var_defs_gender %>% separate(
+  label, c("A", "B", "C", "D", "E", "F", "G"), sep = "!!") %>% mutate(
+    variable_definition = case_when(
+      is.na(G) ~ E, 
+      !is.na(G) ~ G), 
+    variable_definition = str_c(variable_definition, ", ", C), 
+    variable_definition = str_remove_all(variable_definition, ":"),
+    variable_code = column_name, 
+    variable_name = gsub("[^[:alnum:]]+","_", tolower(variable_definition))) %>% select(
+      variable_code, variable_name, variable_definition)
 
+write_csv(var_defs_gender, "data/ACS/var_defs_gender.csv")
 
 # Import and bind all NAICS codes of interest
 data_path <- "data/ACS/gender_data"
 
 files <- dir(data_path, pattern = "*.csv")
 gender <- files %>% 
-  map(~read_csv(file.path(data_path, .)) %>% slice(-1)) %>%
+  map(~read_csv(file.path(data_path, .), 
+                show_col_types = FALSE, 
+                na = "null") %>% slice(-1)) %>%
   reduce(bind_rows) 
 
-# Import data and keep columns of interest, get fips from GEO_ID
-gender <- gender %>% select(
-  GEO_ID, NAME,
-  B24010_011E, B24010_076E, B24010_113E, 
-  B24010_162E, B24010_227E, B24010_264E) %>% mutate(
+# Get fips from GEO_ID
+gender <- gender %>% mutate(
     fips = case_when(
       	str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
-        str_detect(GEO_ID, "0100000") ~ "US", 
+        str_detect(GEO_ID, "0100000") ~ "00", 
         str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
 
-# Rename data and add columns to match other data
-gender <- gender %>%  rename(
-  number_male_farmers_ranchers_ag_managers = B24010_011E, 
-  number_male_food_preparation_serving_occupations = B24010_076E, 
-  number_male_farming_fishing_forestry_occupations = B24010_113E, 
-  number_female_farmers_ranchers_ag_managers = B24010_162E, 
-  number_female_food_preparation_serving_occupations = B24010_227E, 
-  number_female_farming_fishing_forestry_occupations = B24010_264E) %>% select(-GEO_ID)
-
-# Pivot longer
+# Select columns of interest
 gender <- gender %>% pivot_longer(
-  cols = -c(fips, NAME), 
-  names_to = "variable_name", 
-  values_to = "value")
-  
+  cols = !fips, 
+  names_to = "variable_code", 
+  values_to = "value") 
+
+gender <- left_join(var_defs_gender, gender)
+
 # Add in state/county and variables and put in correct order
 gender <- gender %>% left_join(county) %>% mutate(
   category = "Labor", 
   topic_area = "Employment", 
-  year = "2019") %>% mutate(
-    state_name = coalesce(NAME, state_name), 
-    state_name = ifelse(state_name=="United States", NA, state_name)) %>%
-  
+  year = "2019") %>%
   select(
     fips, county_name, state_name, category, topic_area, year, variable_name, value)
 
-# Replace "NULL" with missing and drop missing rows and make numeric
-gender <- gender %>% mutate(
-  value = ifelse(value=="null", NA, value)) %>% filter(
-    !is.na(value))
+# County level
+gender_county <- gender %>% filter(!is.na(state_name))
 
-gender$value <- as.numeric(gender$value)
+# State level
+gender_state <- gender %>% filter(is.na(state_name)) %>% 
+  left_join(state) %>% select(fips, county_name, state_name1, category:value) %>% rename(state_name = state_name1) 
 
+# combine county, state and US data
+gender <- bind_rows(gender_county, gender_state)
+
+# drop duplicate counties, missing rows and make numeric
+gender<- gender %>% group_by(fips, variable_name) %>% distinct()
+
+gender <- gender %>% 
+  filter(
+    !is.na(value)) %>% mutate(
+      value = as.numeric(value))
+
+rm(gender_county, gender_state, var_defs_gender)
 ```
 
 # Median earnings by sector and gender 
@@ -364,7 +377,8 @@ Variables include:
 ```{r}
 
 # Import metadata - only have columns of interest
-var_defs_earnings <- read_csv("data/ACS/ACSST5Y2020.S2411-Column-Metadata.csv") %>% 
+var_defs_earnings <- read_csv("data/ACS/ACSST5Y2020.S2411-Column-Metadata.csv", 
+                              show_col_types = FALSE) %>% 
   clean_names() %>% filter(
   str_detect(label, "^Estimate!!") &    
   (str_detect(label, "!!Food preparation and serving related occupations$") | 
@@ -378,7 +392,7 @@ data_path <- "data/ACS/median_income_data"
 
 files <- dir(data_path, pattern = "*.csv")
 earnings <- files %>% 
-  map(~read_csv(file.path(data_path, .)) %>% slice(-1)) %>%
+  map(~read_csv(file.path(data_path, .), show_col_types = FALSE) %>% slice(-1)) %>%
   reduce(bind_rows) 
 
 # Import data and keep columns of interest, get fips from GEO_ID
@@ -388,7 +402,7 @@ earnings <- earnings %>% select(
   S2411_C03_030E, S2411_C04_023E, S2411_C04_030E) %>% mutate(
     fips = case_when(
       	str_detect(GEO_ID, "0400000") ~ str_sub(GEO_ID,-2), 
-        str_detect(GEO_ID, "0100000") ~ "US", 
+        str_detect(GEO_ID, "0100000") ~ "00", 
         str_detect(GEO_ID, "0500000") ~ str_sub(GEO_ID, -5))) 
 
 # Rename data and add columns to match other data
@@ -441,21 +455,21 @@ County - fips 02010 ALEUTIAN ISLANDS is not a fips code found in the other data 
 ```{r}
 
 # Import data and keep data of interest only
-# Only run this if you download the full data file from the Census website
-#farm_labor <- coa_17 <- read_tsv("data/2017_cdqt_data.txt") %>% clean_names() %>% filter(
-#  census_chapter==2 & census_table==7 & 
-#    (census_row==2 | census_row == 51 | census_row ==55)) 
-
-#write_csv(farm_labor, "data/farm_labor.csv")
+farm_labor <- read_tsv("data/2017_cdqt_data.txt",
+                       show_col_types = FALSE, 
+                       col_types = cols(
+                         .default = "c", 
+                         VALUE = "n")) %>% clean_names() %>%
+  filter(census_chapter==2 & census_table==7 & 
+    (census_row==2 | census_row == 51 | census_row ==55)) 
 
 # Manipulate data so we can add state/county names
-read_csv("data/farm_labor.csv")
 farm_labor <- farm_labor %>% select(
   state_fips_code, county_code, state_name, short_desc, value) %>% unite(
     "fips", state_fips_code:county_code, sep = "", remove = FALSE) %>% mutate(
       fips = ifelse(county_code=="NULL", NA, fips)) %>% mutate(
       fips = coalesce(fips,state_fips_code), 
-      fips = ifelse(fips=="99", "US", fips)) 
+      fips = ifelse(fips=="99", "00", fips)) 
 
 # Import county data, remove state name
 county <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), sep = "", remove = FALSE) %>% rename(county_name = county) %>% select(fips, county_name)
@@ -463,9 +477,9 @@ county <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), s
 # Use state name from NASS data, but make lower case to match other state name data
 farm_labor <- farm_labor %>% left_join(county, by = "fips") %>% mutate(
   state_name = tools::toTitleCase(tolower(state_name)),
-  state_name = ifelse(fips=="US", NA, state_name)) 
+  state_name = ifelse(fips=="00", NA, state_name)) 
 
-# Change national fips code to be "US" to match with other data sets, rename variables, add new columns and keep only what we need
+# Rename variables, add new columns and keep only what we need
 farm_labor <- farm_labor %>% mutate(
   variable_name = case_when(
     short_desc=="LABOR, HIRED - NUMBER OF WORKERS" ~ "hired_labor_number_workers", 
@@ -482,9 +496,11 @@ farm_labor <- farm_labor %>% mutate(
 
 ```{r}
 
-# Join data and write data file
-labor <- bind_rows(labor, gender, earnings, farm_labor)
+# Join data, remove any rows without data 
+labor <- bind_rows(labor, gender, earnings, farm_labor) %>%
+  filter(!is.na(value))
 
+# Write final data file
 write_csv(labor, "labor.csv")
 
 # Write metadata file
@@ -519,5 +535,7 @@ metadata <- metadata %>% mutate(
                       replacement = "number_of_workers"))) %>% 
   select(`2 pager title`, everything())
 
-write_csv(metadata, "metadata_labor1.csv")
+#write_csv(metadata, "metadata_labor1.csv")
+rm(metadata, state, county)
+
 ```

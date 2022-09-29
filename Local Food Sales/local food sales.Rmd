@@ -21,25 +21,37 @@ https://www.usdalocalfoodportal.com/#directories
 https://www.ams.usda.gov/local-food-directories/csas
 https://www.usdalocalfoodportal.com/fe/fdirectory_farmersmarket/?source=fe&directory=farmersmarket&location=&x=&y=
 
+We only keep data that was updated since 8/30/2020 (based on feedback from AMS). 
 
 ```{r}
 library(tidyverse)
 library(sf)
+library(lubridate)
 
-# Import data, keep columns of interest and drop obs. with NA for lat/long
-csa <- readxl::read_xlsx("data/csa_2022-825163837.xlsx") %>% select(
-  listing_id, listing_name, location_address, location_x, location_y) %>% mutate(
-    variable_name = "number_CSAs")
+# Import data, keep columns of interest, drop obs. with NA for lat/long, drop obs. not updated in last two years
+csa <- readxl::read_xlsx("data/csa_2022-825163837.xlsx") %>%
+  mutate(
+    variable_name = "number_CSAs", 
+    update_time = as_date(update_time)) %>% filter(
+    update_time>"2020-08-30", 
+    !is.na(location_x), !is.na(location_y)) %>% 
+  select(
+    listing_id, variable_name, listing_name, location_address, 
+    location_x, location_y)
 
-fm <- readxl::read_xlsx("data/farmersmarket_2022-825165232.xlsx") %>% select(
-  listing_id, listing_name, location_address, location_x, location_y) %>% mutate(
-    variable_name = "number_farmers_markets")
+fm <- readxl::read_xlsx("data/farmersmarket_2022-825165232.xlsx") %>%
+  mutate(
+    variable_name = "number_farmers_markets", 
+    update_time = as_date(update_time)) %>% filter(
+    update_time>"2020-08-30", 
+    !is.na(location_x), !is.na(location_y)) %>% 
+  select(
+    listing_id, variable_name, listing_name, location_address, 
+    location_x, location_y)
 
-fm_csa <- bind_rows(csa, fm) %>% filter(!is.na(location_x), !is.na(location_y)) %>% 
+fm_csa <- bind_rows(csa, fm) %>% 
   rename(lat = location_y, long = location_x)
 rm(csa, fm)
-
-## Make point level data set ----STILL NEED TO DO 
 
 ## Get FIPS codes from lat/long data
 # Get county spatial data frame
@@ -84,7 +96,7 @@ fm_csa_state <- count %>% mutate(
 count <- fm_csa_agg %>% group_by(variable_name) %>% count() %>% rename(value = n)
 
 fm_csa_us<- count %>% mutate(
-  fips = "US",
+  fips = "00",
   category = "Food Retail",
   topic_area = case_when(
     variable_name == "number_CSAs" ~ "Community Supported Agriculture", 
@@ -94,9 +106,82 @@ fm_csa_us<- count %>% mutate(
 
 # bind into one data frame 
 fm_csa_agg <- bind_rows(fm_csa_county, fm_csa_state, fm_csa_us)
-rm(fm_csa_county, fm_csa_state, fm_csa_us, count)
+rm(fm_csa_county, fm_csa_state, fm_csa_us, count, fm_csa)
 
-rm(counties, state)
+rm(counties)
+```
+
+## Import COA data
+Here we import data compiled from the restricted access 2017 Census of Agriculture data on the number of farms participating in local food marketing channels by county. 
+
+There is one county in the data set that does not have a match in the rest of the data (fips 02010). We drop this observation. 
+
+```{r}
+
+# Import data
+coa <- readxl::read_xlsx(
+  "data/08.08.22_AMS Result tables_suppressed.xlsx", 
+  sheet = "market_channel") %>% mutate(
+    fips = str_pad(fips, side = "left", pad = "0",
+                   width = 5)) %>% filter(!fips=="02010")
+
+# calculate percentage variables 
+coa <- coa %>% mutate(across(d2c_only:nonlocal, 
+                             .fns = ~./n, 
+                             .names = "{col}_p"))
+
+# make data long and add year variable
+coa_county <- coa %>% rename(all_farms = n) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "variable_name", 
+  values_to = "value") %>% mutate(
+    year = "2017")
+
+# Aggregate to the state level
+coa_state <- coa %>% left_join(state) %>% group_by(state_code) %>% 
+  summarise(across(n:nonlocal, ~ sum(.))) %>% 
+  mutate(across(d2c_only:nonlocal, 
+                             .fns = ~./n, 
+                             .names = "{col}_p"))
+
+coa_state <- coa_state %>% rename(
+  all_farms = n, 
+  fips = state_code) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "variable_name", 
+  values_to = "value") %>% mutate(
+    year = "2017") 
+
+# Aggregate to the national level 
+coa_US <- coa %>%  
+  summarise(across(n:nonlocal, ~ sum(.))) %>% 
+  mutate(across(d2c_only:nonlocal, 
+                             .fns = ~./n, 
+                             .names = "{col}_p"))
+
+coa_US <- coa_US %>% rename(
+  all_farms = n) %>% mutate(
+    year = "2017", 
+    fips = "00") %>% pivot_longer(
+      cols = !c(year, fips), 
+      names_to = "variable_name", 
+      values_to = "value") 
+
+# Bind rows 
+coa <- bind_rows(coa_county, coa_state, coa_US)
+
+# Add columns 
+coa <- coa %>% mutate(
+  category = "Food Retail",
+  topic_area = "General DTC") %>% select(
+    fips, topic_area, category, year, variable_name, value) 
+
+rm(coa_county, coa_state, coa_US, state)
+
+# write file for metadata 
+coa_meta <- coa %>% select(category, topic_area, variable_name) %>% distinct()
+write_csv(coa_meta, "coa_meta_temp.csv")
+
 ```
 
 ## Combine all data and put in final format 
@@ -104,7 +189,7 @@ rm(counties, state)
 ```{r}
 fips <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), sep = "", remove = FALSE) %>% select(fips, state_name, county) %>% rename(county_name= county) 
 
-local <- fm_csa_agg %>% left_join(fips) %>% select(
+local <- bind_rows(fm_csa_agg, coa) %>% left_join(fips) %>% select(
   fips, county_name, state_name, category, topic_area, year, variable_name, value)
 
 # Write file 

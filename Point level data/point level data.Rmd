@@ -1,0 +1,195 @@
+---
+title: "Point level data"
+author: "Allie Bauman"
+date: "2022-09-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+In this file we gather all point level data that will be used in the map. Count data are also provided at the county, state and national level and can be found in the RMarkdown files associated with each relevant 2 pager.  
+Code related to food hub, meat processor, and colleges/universities count data can be found in "business development and infrastructure.Rmd" and code related to farmers markets and CSA count data can be found in "local food sales.Rmd".  
+
+## Food Hubs, farmers markets, and CSAs
+Data for food hubs, farmers markets and CSAs is gathered from the USDA Agricultural Marketing Service, Local Food Directories
+
+Data can be found on the USDA Local Food Portal:  https://www.usdalocalfoodportal.com/
+
+Notes: listing_id=="500226" data error on year established fixed manually 
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# Import data, drop observations not updated since 8/30/3030 (for AMS data only), keep only columns of interest
+food_hub <- readxl::read_xlsx(
+  "data/foodhub_2022-8127185.xlsx") %>% mutate(
+    location_x = as.numeric(location_x), 
+    location_y = as.numeric(location_y), 
+    update_time = as_date(update_time), 
+    org_type = "Food Hub", 
+    establish_year = ifelse(listing_id=="500226", 
+                            "2004", establish_year),  
+    description = str_c("Year established: ", 
+                             establish_year)) %>%
+  filter(update_time>"2020-08-30") %>% select(
+    location_x, location_y, listing_name, 
+    location_address, description, org_type)
+
+fm <- readxl::read_xlsx("data/farmersmarket_2022-825165232.xlsx") %>% 
+  mutate(
+    location_x = as.numeric(location_x), 
+    location_y = as.numeric(location_y), 
+    update_time = as_date(update_time), 
+         org_type = "Farmers Market", 
+         description = str_c("Location description: ", 
+                             location_desc)) %>%
+  filter(update_time>"2020-08-30") %>% select(
+    location_x, location_y, listing_name, 
+    location_address, description, org_type)
+
+csa <- readxl::read_xlsx("data/csa_2022-825163837.xlsx") %>% 
+  mutate(
+    location_x = as.numeric(location_x), 
+    location_y = as.numeric(location_y), 
+    update_time = as_date(update_time), 
+    org_type = "Community Supported Agriculture (CSA)",
+    description = str_c("Years in operation: ", 
+                             gsub(";$","", 
+                                  continueoperate_year))) %>%
+  filter(update_time>"2020-08-30") %>% select(
+    location_x, location_y, listing_name, 
+    location_address, description, org_type) 
+
+# Bind local market data into one data frame
+local_markets <- bind_rows(food_hub, fm, csa)
+rm(fm, csa, food_hub)
+
+# Rename columns and drop obs. with missing lat/long
+local_markets <- local_markets %>% rename(
+  long = location_x, 
+  lat = location_y, 
+  org_name = listing_name, 
+  org_address = location_address) %>% filter(
+    !is.na(lat))
+
+```
+
+## Meat processors
+Data on meat processors is gathered from the USDA Food Safety and Inspection Service and downloaded from the Tableau map. 
+
+https://www.fsis.usda.gov/inspection/establishments/meat-poultry-and-egg-product-inspection-directory
+
+
+```{r}
+library(janitor)
+
+# import data, rename lat/long and keep columns of interest
+meat <- readxl::read_xlsx("data/FSIS_meat_processor.xlsx") %>% clean_names() %>% rename(
+  lat = norm_lat, 
+  long = norm_long) %>% select(
+    lat, long, establishment_name, address_line1, city_state, postal_code, inspection_activities, haccp_size, processing)
+
+# each business is duplicated if the variable "processing" has multiple options, we combine the different types of processing into one variable and keep only one line per operation
+meat <- meat %>% group_by(establishment_name) %>% mutate(
+  processing = ifelse(is.na(processing), NA, 
+    paste0(processing, collapse = ", "))) %>% distinct(establishment_name, .keep_all = TRUE)
+
+# Create one address variable and add a description variable  
+meat <- meat %>% unite(
+  "org_address", 
+  c(address_line1, city_state), sep = ", ") %>% unite(
+    "org_address", c(org_address, postal_code), 
+    sep = " ") %>% mutate(
+      haccp_size = ifelse(haccp_size=="N / A", NA, haccp_size), 
+      description = str_c("HACCP size: ", 
+                          haccp_size, 
+                          "; Inspection activities: ", 
+                          inspection_activities), 
+      org_type = "Meat processor") %>% 
+  rename(org_name = establishment_name) %>% 
+  select(lat, long, org_name, org_address, description, org_type)
+
+```
+
+## Location and number of colleges and universities
+
+Data from IES National Center for Education Statistics, https://nces.ed.gov/collegenavigator/
+
+All data available for download https://nces.ed.gov/ipeds/datacenter/DataFiles.aspx?gotoReportId=7&fromIpeds=true&
+
+We drop 3 observations in Micronesia. Data already contains fips codes so we do not need to add them. 
+
+```{r}
+# Import data and keep columns of interest
+college <- read_csv("data/hd2021.csv", 
+                    show_col_types = FALSE) %>% clean_names() %>%
+  select(latitude, longitud, fips, countycd, instnm, 
+         addr, city, stabbr, zip, webaddr) %>% rename(
+           state_fips = fips, 
+           lat = latitude, 
+           long = longitud, 
+           description = webaddr, 
+            org_name = instnm) %>% mutate(
+             fips = str_pad(countycd, 
+                            width = 5, side = "left", pad = "0"),
+             state_fips = str_pad(state_fips, 
+                                  width = 2, side = "left", pad = "0")) %>%
+  filter(fips != "000-2") %>% select(!c(countycd, state_fips))
+
+# Rename columns and add description, full addressng lat/long
+college <- college %>% unite(
+  "org_address", c(addr, city, stabbr), sep = ", ") %>% unite(
+    "org_address", c(org_address, zip), sep = " ") %>% mutate(
+      org_type = "Colleges and universities")
+```
+
+## Create final data frame
+Local market and meat processor data has lat/long coordinates but do not have FIPS codes. We first match lat/long coordinates to county data and then join to the college/university data. 
+
+```{r}
+library(USAboundaries)
+library(sf)
+
+# Join meat and local market data 
+point_data <- bind_rows(local_markets, meat)
+
+## Get FIPS codes from lat/long data
+# Get county spatial data frame
+counties <- USAboundaries::us_counties(resolution = "high")
+
+# make food_hub data frame into a spatial data frame
+point_data <- point_data %>% st_as_sf(coords = c("long", "lat"), crs = 4326, remove = FALSE)
+
+# Join point level data to county data, return the fips code, and turn back into a regular data frame
+point_data <- st_join(point_data, left = FALSE, counties["geoid"]) %>% as.data.frame() %>% 
+  rename(fips = geoid) %>% select(!geometry)
+rm(counties)
+
+# Join college data 
+point_data <- bind_rows(point_data, college)
+
+# Add state_name and county_name and put in correct order 
+fips_county <- tidycensus::fips_codes %>% unite(col = "fips", c("state_code", "county_code"), sep = "") %>% 
+  rename(county_name = county) %>% select(!state)
+
+point_data <- point_data %>% left_join(fips_county) %>% select(
+  fips, state_name, county_name, lat, long, 
+  org_type, org_name, org_address, description)
+
+# Add a column called variable_name to map data file to metadata file
+point_data <- point_data %>% mutate(
+  variable_name = case_when(
+    org_type =="Food Hub" ~ "location_food_hub", 
+    org_type == "Meat processor" ~ "location_meat_processors", 
+    org_type == "Colleges and universities" ~
+      "location_colleges_universities", 
+    org_type == "Community Supported Agriculture (CSA)" ~ 
+      "location_CSAs", 
+    org_type== "Farmers Market" ~ "location_farmers_markets"))
+
+# write final data file 
+write_csv(point_data, "point_data.csv")
+```

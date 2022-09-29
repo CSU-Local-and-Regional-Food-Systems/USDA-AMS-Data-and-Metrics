@@ -11,8 +11,6 @@ knitr::opts_chunk$set(echo = TRUE)
 
 In this file, we import and manipulate all data related to Business Development and Infrastructure.  
 
-We first import state and zip code level data to use in files where needed. 
-
 ```{r, message=FALSE}
 
 library(tidyverse)
@@ -25,35 +23,26 @@ state <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), se
 ## Food Hubs
 Data from the USDA Local Food Directories, https://www.usdalocalfoodportal.com/fe/fdirectory_foodhub/?source=fe&directory=foodhub&location=&x=&y=
 
-Food hub data is provided in two different ways. First, the data will be provided as point level data. Second, it will be aggregated up to the county, state, and national number so we can get counts of food hubs per geography. 
+We only keep data that was updated since 8/30/2020 (based on feedback from AMS). 
 
-We do not have county name in this data file. To get county name, we convert lat and long data using the lotlong2fips function developed by Loren Collingwood: https://rdrr.io/github/lorenc5/eiCompare/man/latlong2fips.html 
-
-The following data is incorrect in the file: 
-   * Incorrect address : Corbin Hill Food Project
-   * ID 500057, Coulter Farms added address: 964 Price Rd, Honey Grove, PA 17035
-   * ID 500060, Vermont Food Venture Center, zip code should be 05843
-   * ID 500130, zip code was changed from 72334 to 72335.
-   * Any row without a zip code it was added 
+Point level data will be gathered an manipulated in a separate fiel. Second, it will be aggregated up to the county, state, and national number so we can get counts of food hubs per geography. 
 
 ```{r, message=FALSE}
+library(sf)
+library(lubridate)
 
 # Read in data
 food_hub <- readxl::read_xlsx("data/foodhub_2022-8127185.xlsx")
+
+food_hub$update_time <- as_date(food_hub$update_time) 
+
+# Drop observations not updated since 8/30/3030
+food_hub <- food_hub %>% filter(update_time>"2020-08-30")
 
 # Keep columns of interest
 food_hub <- food_hub %>% select(listing_id, location_x, location_y, listing_name, location_address) %>% filter(!is.na(location_x), !is.na(location_y)) %>% rename(
   lat = location_y, 
   long = location_x)
-
-# Make point data long --- THIS NEEDS TO BE DONE AGAIN 
-food_hub_point <- food_hub %>% select(!listing_id) %>% rename(
-  business_name = listing_name, 
-  business_address = location_address) %>% mutate(
-    business_type = "food hub") %>% pivot_longer(
-  cols = !c(lat, long), 
-  names_to = "variable_name",
-  values_to = "value") 
 
 ## Get FIPS codes from lat/long data
 # Get county spatial data frame
@@ -62,7 +51,7 @@ counties <- USAboundaries::us_counties(resolution = "high")
 # make food_hub data frame into a spatial data frame
 food_hub_agg <- food_hub %>% st_as_sf(coords = c("long", "lat"), crs = 4326, remove = FALSE)
 
-# Join point level meat data to county data, return the fips code, and turn back into a regular data frame
+# Join point level data to county data, return the fips code, and turn back into a regular data frame
 food_hub_agg <- st_join(food_hub_agg, left = FALSE, counties["geoid"]) %>% as.data.frame() %>% 
   rename(fips = geoid)
 
@@ -93,7 +82,7 @@ state_agg <- count %>% mutate(
 # Aggregate to get number of food hubs in US
 count <- food_hub_agg %>% count() %>% rename(value = n)
 us_agg <- count %>% mutate(
-  fips = "US",
+  fips = "00",
   topic_area = "Food hubs", 
   category = "Processing & Distribution", 
   year = "2022", 
@@ -115,12 +104,6 @@ https://www.fsis.usda.gov/inspection/establishments/meat-poultry-and-egg-product
 
 For the point data, we keep all observations. For the counts of processors per county/state/US, we drop all observations with duplicate business addresses. A business gets a listing for each type of processing they do, we only keep one observation for each business address to avoid double counting. 
 
-Get a shape file with county level data from the U.S. Census Bureau, Census Mapping Files, Cartographic Boundary Files. 
-
-https://www.census.gov/geographies/mapping-files/time-series/geo/cartographic-boundary.html
-
-Variables to keep - lat, long, establishment_name, address_line1, city_state, postal_code, inspection_activities, haccp_size, processing
-
 ```{r, message=FALSE}
 library(janitor)
 library(sf)
@@ -136,8 +119,6 @@ meat <- readxl::read_xlsx("data/FSIS_meat_processor.xlsx") %>% clean_names() %>%
 meat <- meat %>% group_by(establishment_name) %>% mutate(
   processing = ifelse(is.na(processing), NA, 
     paste0(processing, collapse = ", "))) %>% distinct(establishment_name, .keep_all = TRUE)
-
-# Make point data long ---THIS NEEDS TO CHANGE TO A NEW FORMAT
 
 ## Get FIPS codes from lat/long data
 # Get county spatial data frame
@@ -178,7 +159,7 @@ meat_state <- count %>% mutate(
 count <- meat_agg %>% count() %>% rename(value = n)
 
 meat_us<- count %>% mutate(
-  fips = "US",
+  fips = "00",
   category = "Processing & Distribution",
   topic_area = "Meat and Poultry",
   year = "2022", 
@@ -213,9 +194,6 @@ college <- read_csv("data/college_university/hd2021.csv") %>% clean_names() %>%
              state_fips = str_pad(state_fips, width = 2, side = "left", pad = "0")) %>% 
   filter(fips != "000-2") %>% select(!countycd)
 
-# Make point level data set ---UPDATE WITH NEW FORMAT
-college_point <- college 
-
 # Aggregate to get number of colleges per county 
 count <- college %>% group_by(fips) %>% count() %>% rename(value = n)
  
@@ -241,7 +219,7 @@ state_agg <- count %>% mutate(
 # Aggregate to get number of food hubs in US
 count <- college %>% count() %>% rename(value = n)
 us_agg <- count %>% mutate(
-  fips = "US",
+  fips = "00",
   topic_area = "Institutions", 
   category = "Institutions", 
   year = "2022", 
@@ -396,7 +374,7 @@ fts_us <- count %>% pivot_longer(
   cols = everything(),
   names_to = "variable_name", 
   values_to = "value") %>% mutate(
-    fips = "US",
+    fips = "00",
     category = "Institutions", 
     topic_area = "Institutions", 
     year = "SY2018-2019") %>% select(
@@ -417,11 +395,11 @@ https://usda.library.cornell.edu/concern/publications/x059c7329
 ```{r, message=FALSE}
 
 # Read in capacity of refrigerated warehouses data
-cold_capacity <- read_csv("data/rfwh0122/rfwh_p05_t001.csv", skip = 6) %>% 
-  select(!c(`1`, u, `(number)_2`)) %>% rename(
-    state_name = X3, 
-    public_refrigerated_warehouses = `(number)`, 
-    private_semi_private_refrigerated_warehouses = `(number)_1`) %>% filter(
+cold_capacity <- read_csv("data/rfwh0122/rfwh_p05_t001.csv", skip = 6) %>%  
+  select(!c(`1`, u, `(number)...6`)) %>% rename(
+    state_name = `...3`, 
+    public_refrigerated_warehouses = `(number)...4`, 
+    private_semi_private_refrigerated_warehouses = `(number)...5`) %>% filter(
       !is.na(state_name) & state_name!="-  Represents zero.") %>% mutate(
         public_refrigerated_warehouses = ifelse(public_refrigerated_warehouses=="-", NA, public_refrigerated_warehouses), 
         private_semi_private_refrigerated_warehouses = ifelse(private_semi_private_refrigerated_warehouses=="-", NA, private_semi_private_refrigerated_warehouses))
@@ -430,7 +408,7 @@ cold_capacity <- read_csv("data/rfwh0122/rfwh_p05_t001.csv", skip = 6) %>%
 state_fips <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), sep = "", remove = FALSE) %>% select(state_name, state_code) %>% distinct(state_code, .keep_all = TRUE) %>% rename(fips = state_code)
 
 cold_capacity <- cold_capacity %>% left_join(state_fips) %>% mutate(
-  fips = ifelse(state_name=="United States", "US", fips))
+  fips = ifelse(state_name=="United States", "00", fips))
 
 # Make data long 
 cold_capacity <- cold_capacity %>% pivot_longer(
@@ -468,6 +446,9 @@ rm(county_codes, state_codes)
 business_development_infrastructure <- left_join(business_development_infrastructure, fips_codes) %>% mutate(
   state_name = ifelse(is.na(state_name), "US", state_name)) %>% select(
     fips, county_name, state_name, category, topic_area, year, variable_name, value)
+
+# Remove rows with NAs
+business_development_infrastructure <- business_development_infrastructure %>% filter(!is.na(value) & value!=0)
 
 write_csv(business_development_infrastructure, "business_development_infrastructure.csv")
 ```

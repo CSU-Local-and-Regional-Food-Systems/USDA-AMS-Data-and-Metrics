@@ -1,0 +1,1056 @@
+---
+title: "Food Access"
+author: "Sean Callahan and Allie Bauman"
+date: '2022-06-14'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Nutrition Security and Food Access
+In this file, we get all data associated with the Nutrition Security and Food Access 2-pager.  
+
+```{r read_files}
+library(tidyverse)
+library(readxl)
+library(tidycensus)
+library(janitor)
+
+fips_county <- fips_codes %>% unite(col = "fips", c("state_code", "county_code"), sep = "") %>% 
+  rename(county_name = county)
+
+fips_state <- fips_codes %>% rename(fips = state_code) %>%
+  select(fips, state_name) %>% 
+  unique()
+
+```
+
+## SNAP participation 
+We collect data on SNAP participation rates by state provided by the USDA Food and Nutrition Service, 2019. These data are not available at the county level from this source. 
+
+https://www.fns.usda.gov/usamap
+
+National data shows on the map on the website but is not part of the downloadable data, so these are added manually. 
+
+```{r federal_nutrition_program}
+
+# Import data
+snap_par <- read_csv(
+  "data/federal_nutrition_program/SNAP-state-rates.csv", 
+  show_col_types = FALSE) %>% clean_names() %>% rename(state_name = state)
+
+snap_par <- snap_par %>% 
+  left_join(fips_state) %>% 
+  mutate(year = "2019", topic_area = "Federal Nutrition Program", category = "Food Access") %>% 
+  relocate(fips, state_name, category, topic_area, year, .before = all_eligible_people) 
+
+snap_par <- snap_par %>% pivot_longer(
+  cols = !c(fips, state_name, year, topic_area, category), 
+  values_to = "value",
+  names_to = "variable_name") %>% filter(!is.na(value))
+
+# Add national data manually
+snap_par <- snap_par %>% add_row(
+  fips = "00", 
+  state_name = NA, 
+  category = "Food Access", 
+  topic_area = "Federal Nutrition Program", 
+  year = "2019", 
+  variable_name = "all_eligible_people", 
+  value = 82) %>% add_row(
+  fips = "00", 
+  state_name = NA, 
+  category = "Food Access", 
+  topic_area = "Federal Nutrition Program", 
+  year = "2019", 
+  variable_name = "working_poor_people", 
+  value = 74) %>% add_row(
+  fips = "00", 
+  state_name = NA, 
+  category = "Food Access", 
+  topic_area = "Federal Nutrition Program", 
+  year = "2019", 
+  variable_name = "elderly_people", 
+  value = 42)
+
+# Convert value to a percentage
+snap_par <- snap_par %>% mutate(
+  value = value/100)
+
+# Add "snap_par" as a prefix to variable names to make more clear 
+snap_par$variable_name <- paste0("snap_par_", snap_par$variable_name)
+```
+
+## SNAP participation by race 
+Data is collected from the U.S. Census Bureau, American Community Survey, S2201 FOOD STAMPS/SUPPLEMENTAL NUTRITION ASSISTANCE PROGRAM (SNAP), 2017-2020. 
+
+https://data.census.gov/cedsci/table?q=food%20assistance&tid=ACSST5Y2020.S2201
+
+Variables include
+
+  * S2201_C04_025E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!White alone
+  * S2201_C04_026E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!Black or African American alone
+  * S2201_C04_027E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!American Indian and Alaska Native alone
+  * S2201_C04_028E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!Asian alone
+  * S2201_C04_029E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!Native Hawaiian and Other Pacific Islander alone
+  * S2201_C04_030E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!Some other race alone
+  * S2201_C04_031E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!Two or more races
+  * S2201_C04_032E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!Hispanic or Latino origin (of any race)
+  * S2201_C04_033E	Estimate!!Percent households receiving food stamps/SNAP!!Households!!RACE AND HISPANIC OR LATINO ORIGIN OF HOUSEHOLDER!!White alone, not Hispanic or Latino
+
+
+```{r}
+
+# Import data from 2017-2020
+var_list <- c("S2201_C04_025E", "S2201_C04_026E", 
+    "S2201_C04_027E", "S2201_C04_028E", "S2201_C04_029E", 
+    "S2201_C04_030E", "S2201_C04_031E", "S2201_C04_032E", 
+    "S2201_C04_033E")
+data_dir <- "data/federal_nutrition_program/ACS"
+csv_files <- fs::dir_ls(data_dir, regexp = "\\.csv$")
+snap_race <- csv_files %>% map_dfr(read_csv, 
+                                   na = c("(X)", "-", "**"),
+                                   .id = "source", 
+                                   show_col_types = FALSE) %>%
+  slice(-1) %>% select(
+    source, GEO_ID, NAME, 
+    all_of(var_list))
+  
+# Add data year 
+snap_race <- snap_race %>% separate(
+  source, c("A", "B", "C", "D"), sep = "/") %>% select(!c(A, B, C)) %>% separate(D, c("A", "B")) %>% mutate(
+  year = str_remove(A, "ACSST5Y")) %>% select(!c(A,B))
+
+# Add topic area and category and fips
+snap_race <- snap_race %>% mutate(
+  topic_area = "Federal Nutrition Program", 
+  category = "Food Access", 
+  fips = str_remove(GEO_ID, "0500000US")) %>% select(!c(GEO_ID, NAME))
+
+# Rename variables 
+snap_race <- snap_race %>% rename(
+  SNAP_percent_white_alone = S2201_C04_025E, 
+  SNAP_percent_black_alone = S2201_C04_026E,
+  SNAP_percent_indian_alone = S2201_C04_027E, 
+  SNAP_percent_asian_alone = S2201_C04_028E,
+  SNAP_percent_native_hawaiian_alone = S2201_C04_029E, 
+  SNAP_percent_other_race_alone = S2201_C04_030E, 
+  SNAP_percent_two_or_more_races = S2201_C04_031E,
+  SNAP_percent_hispanic_any_race = S2201_C04_032E,
+  SNAP_percent_white_alone_not_hispanic = S2201_C04_033E)
+
+# Pivot data longer, join with county name, state name and reorder
+snap_race <- snap_race %>% pivot_longer(
+  cols = !c(fips, year, topic_area, category), 
+  values_to = "value",
+  names_to = "variable_name") %>% filter(!is.na(value)) %>% left_join(fips_county, by = "fips") %>% select(
+    fips, county_name, state_name, category, topic_area, year, 
+    variable_name, value)
+
+# Make data a percentage
+snap_race$value = as.numeric(snap_race$value)
+snap_race <- snap_race %>% mutate(
+  value = value/100)
+```
+
+## WIC Eligibility and participation rates
+WIC eligibility and participation data is gathered from the USDA Food and Nutrition Service, WIC 2019 Eligibility and Coverage Rates report. Data is downloaded from the WIC eligibility and participation by state over time section. 
+
+https://www.fns.usda.gov/wic/2019-eligibility-coverage-rates#:~:text=More%20recently%2C%20between%202016%20and,and%2057%20percent%20in%202019.
+
+WIC eligibility rates are included in the data and participation rates are calculated by taking WIC participation divided by the state population. National level data is provided by WIC participation, but is not for eligibility. 
+
+```{r}
+
+# Import participation data
+participation <- read_xlsx("data/federal_nutrition_program/national-wic-eligibility-and-participation-by-state-2005-2019-v3.xlsx", 
+                              sheet = "Participant Population", 
+                              range = "A3:P55") %>% 
+  pivot_longer(
+  !State, 
+  names_to = "year", 
+  values_to = "wic_participation") 
+
+# Import population data to calculate participation rate
+population <- read_xlsx("data/federal_nutrition_program/national-wic-eligibility-and-participation-by-state-2005-2019-v3.xlsx", 
+                              sheet = "Total Population", 
+                              range = "A3:P55") %>% 
+  pivot_longer(
+  !State, 
+  names_to = "year", 
+  values_to = "population") 
+
+# Import eligibility data 
+eligibility <- read_xlsx("data/federal_nutrition_program/national-wic-eligibility-and-participation-by-state-2005-2019-v3.xlsx", 
+                              sheet = "Elig Rates by State & Year", 
+                              range = "A3:P55") %>% 
+  pivot_longer(
+  !State, 
+  names_to = "year", 
+  values_to = "wic_eligibility_rate") 
+
+# Join all data 
+wic <- left_join(participation, population) %>% left_join(eligibility) %>% 
+  rename(state_name = State)
+rm(participation, population, eligibility)
+
+# Calculate participation rate 
+wic <- wic %>% mutate(
+  wic_participation_rate = wic_participation/population)
+
+# State level data 
+wic_state <- wic %>% select(state_name, year, wic_participation_rate, wic_eligibility_rate) %>% pivot_longer(
+  !c(state_name, year), 
+  names_to = "variable_name", 
+  values_to = "value")
+
+# National data - participation only 
+wic_national <- wic %>% group_by(year) %>% summarise(
+  value = sum(wic_participation)/sum(population)) %>% mutate(
+    state_name = NA, 
+    variable_name = "wic_participation_rate")
+
+# Combine 
+wic <- bind_rows(wic_state, wic_national)
+rm(wic_state, wic_national)
+
+# Add FIPS and put in final file format 
+wic <- wic %>% 
+  left_join(fips_state) %>% mutate(
+      fips = ifelse(is.na(fips), "00", fips), 
+      county_name = NA, 
+      topic_area = "Federal Nutrition Program", 
+      category = "Food Access") %>% select(
+      fips, county_name, state_name, 
+      category, topic_area, year, variable_name, value)
+```
+
+## Food Environment data
+Data on the food environment is collected from the USDA ERS Food Environment Atlas, Food Environment Atlas .csv Files (9/10/2020). 
+
+https://www.ers.usda.gov/data-products/food-environment-atlas/data-access-and-documentation-downloads
+
+We use the most recent year of data available. We gather data on low access by race and food store. 
+
+Food store variables:
+
+* "Grocery stores/1,000 pop, 2016" (GROCPTH16)
+* "Supercenters and club stores/1,000 pop, 2016" (SUPERCPTH16)
+* "Convenience stores/1,000 pop, 2016" (CONVSPTH16)
+* "Specialized stores/1,000 pop, 2016" (SPECSPTH16) 
+* "SNAP-authorized stores/1,000 pop, 2017" (SNAPSPTH17) 
+
+We then create an index out of these variables to represent retail density (not including SNAP-authorized stores). This index will be based on the highest number of food stores/1,000 pop (grocery, supercenter, convenience, specialized) in a county. A retail density index of 1 will represent the most county in the U.S. with the highest retail density.
+  
+```{r food_store}
+
+# read in data 
+food_atlas <- read_csv("data/food_store/FoodEnvironmentAtlas/StateAndCountyData.csv", col_types = cols(FIPS = "c"), 
+                       show_col_types = FALSE) %>% 
+  clean_names() %>% mutate(
+  variable_code = tolower(variable_code), 
+  fips = str_pad(fips, side = "left", pad = "0", width = "5")) %>% select(!c(state, county))
+
+# variables to keep 
+variables <- c("fmrktpth18", "snapspth17", 
+               "pct_laccess_pop15", "laccess_pop15", 
+    "pct_laccess_child15", "laccess_child15", 
+    "pct_laccess_seniors15", "laccess_seniors15", 
+    "pct_laccess_hhnv15", "laccess_hhnv15", 
+    "pct_laccess_snap15", "laccess_snap15", 
+    "pct_laccess_black15", "laccess_black15", 
+    "pct_laccess_hisp15", "laccess_hisp15",
+    "pct_laccess_white15", "laccess_white15", 
+    "pct_laccess_multir15", "laccess_multir15", 
+    "pct_laccess_nhasian15", "laccess_nhasian15", 
+    "pct_laccess_nhna15", "laccess_nhna15", 
+    "pct_laccess_nhpi15", "laccess_nhpi15",
+    "grocpth16", "groc16",
+    "supercpth16", "superc16",
+    "convspth16", "conv16",
+    "specspth16", "specs16", 
+    "ffrpth16", "ffr16")
+
+# Keep variables of interest
+food_atlas <- food_atlas %>% filter(
+  variable_code %in% all_of(variables))
+
+# Create retail density index 
+food_atlas <- food_atlas %>% pivot_wider(
+  names_from = variable_code, 
+  values_from = value) %>% mutate(
+  total_retail = grocpth16 + supercpth16 + convspth16 + specspth16, 
+  retail_density_index16 = total_retail/max(total_retail)) %>% select(!total_retail) %>% pivot_longer(
+    cols = !fips, 
+    names_to = "variable_code", 
+    values_to = "value")
+
+# add columns
+food_atlas <- food_atlas %>% left_join(fips_county) %>% 
+  separate(
+    variable_code, sep = -2, c("variable_name", "year")) %>% 
+  mutate(
+    year = str_pad(year, side = "left", pad = "0", width = 3), 
+    year = str_pad(year, side = "left", pad = "2", width = 4),
+    category = "Food Access", 
+    topic_area = "Food Store") %>% select(
+      fips, county_name, state_name, category, topic_area, 
+      year, variable_name, value)
+
+# Divide percentages by 100
+food_atlas <- food_atlas %>% mutate(
+  value = ifelse(str_detect(variable_name, "pct"), 
+                 value/100, value))
+
+# Create metadata file to add to existing file 
+var_list <- read_csv("data/food_store/FoodEnvironmentAtlas/VariableList.csv") %>% clean_names() %>% mutate(
+  variable_code = tolower(variable_code)) 
+
+#Keep variables of interest and make user friendly variable names
+access <- var_list %>% filter(
+  variable_code %in% all_of(variables) & 
+    category_code == "ACCESS") %>% separate(variable_name, 
+           c("A", "B", "C"),
+           sep = ",") %>% mutate(
+     A = str_to_lower(A), 
+     B = str_to_sentence(B), 
+     B = str_replace(B, " ", "")) %>% unite(
+       "user_friendly_variable_name", c(B, A), sep = ", ") %>% 
+  select(!C) %>% separate(
+    variable_code, sep = -2, c("variable_name", "year")) %>% 
+  mutate(
+      year = str_pad(year, width = 3, side = "left", pad = "0"), 
+      year = str_pad(year, width = 4, side = "left", pad = "2"))
+
+stores_local <- var_list %>% filter(
+  variable_code %in% all_of(variables) & 
+    category_code != "ACCESS") %>% mutate(
+      user_friendly_variable_name = 
+        str_sub(variable_name, end=-7)) %>% select(!variable_name) %>% separate(
+    variable_code, sep = -2, c("variable_name", "year")) %>% 
+  mutate(
+      year = str_pad(year, width = 3, side = "left", pad = "0"), 
+      year = str_pad(year, width = 4, side = "left", pad = "2"))
+  
+var_list <- bind_rows(access, stores_local) %>% mutate(
+      `2 pager title` = "Nutrition Security and Food Access", 
+      category = "Food Access", 
+      topic_area = "Food Store", 
+      periodicity = "Yearly") %>% rename(
+        aggregation = units) %>% select(
+          `2 pager title`, category, topic_area, 
+          variable_name, user_friendly_variable_name,
+          periodicity, aggregation)
+
+# write var_list to a csv and manually add to existing metadata file
+write_csv(var_list, "temp_metadata.csv")
+rm(var_list, stores_local, access, variable)
+
+```
+
+## Hours worked
+
+We gather data from 2017-2020 on mean usual hours worked from the U.S. Census Bureau, American Community Survey, B23020  MEAN USUAL HOURS WORKED IN THE PAST 12 MONTHS FOR WORKERS 16 TO 64 YEARS. 
+
+https://data.census.gov/cedsci/table?q=mean%20hours%20worked&tid=ACSDT5Y2020.B23020
+
+```{r food_preparation}
+
+# Import data 
+data_dir <- "data/food_preparation/ACSDT5YB23020"
+csv_files <- fs::dir_ls(data_dir, regexp = "\\.csv$")
+hours_worked <- csv_files %>% map_dfr(read_csv, 
+                                      show_col_types = FALSE,
+                                   na = c("(X)", "-", "**"),
+                                   .id = "source") %>%
+  slice(-1) %>% select(
+    source, GEO_ID,
+    B23020_001E, B23020_002E, B23020_003E)
+  
+# Add data year, fips, and county and state name
+hours_worked <- hours_worked %>% separate(
+  source, c("A", "B", "C", "D"), sep = "/") %>% 
+  select(!c(A, B, C)) %>% 
+  separate(D, c("A", "B")) %>% 
+  mutate(
+    year = str_sub(A, -4,-1), 
+    fips = str_sub(GEO_ID, -5, -1)) %>% select(!c(A,B, GEO_ID)) %>% 
+  left_join(fips_county)
+
+# Rename variables, add columns 
+hours_worked <- hours_worked %>% rename(
+  mean_usual_hours = B23020_001E, 
+  mean_usual_hours_male = B23020_002E, 
+  mean_usual_hours_female = B23020_003E)  %>% select(!state)
+
+# Pivot longer 
+hours_worked <- hours_worked %>% pivot_longer(
+  !c(fips, county_name, state_name, year), 
+  names_to = "variable_name", 
+  values_to = "value") %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+# Add state- and US-level data for 2020
+hours_worked_state <- read_csv("data/food_preparation/ACSDT5YB23020/state_us/ACSDT5Y2020.B23020-2022-09-06T011330_state.csv", 
+                               show_col_types = FALSE) %>% slice(-1) %>% 
+  pivot_longer(
+    !`Label (Grouping)`, 
+    names_to = "state_name", 
+    values_to = "value") %>% mutate(
+      state_name = str_remove(state_name, "!!Estimate"))
+
+# Add variable names 
+hours_worked_state <- hours_worked_state %>% mutate(
+  variable_name = case_when(
+    str_detect(`Label (Grouping)`, 
+               "Female") ~ "mean_usual_hours_female",
+    str_detect(`Label (Grouping)`, 
+               "Male") ~ "mean_usual_hours_male",
+    str_detect(`Label (Grouping)`, 
+               "Total") ~ "mean_usual_hours")) %>% select(
+                 !`Label (Grouping)`)
+
+# Add fips and other variables 
+hours_worked_state <- hours_worked_state %>% left_join(
+  fips_state) %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation", 
+    county_name = NA, 
+    year = "2020") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+hours_worked$value <- as.numeric(hours_worked$value)
+
+# US
+hours_worked_US <- read_csv("data/food_preparation/ACSDT5YB23020/state_us/ACSDT5Y2020.B23020-2022-09-06T021415_US.csv", 
+                            show_col_types = FALSE) %>% slice(-1) %>% select(
+  !`United States!!Margin of Error`) %>% mutate(
+  variable_name = case_when(
+    str_detect(`Label (Grouping)`, 
+               "Female") ~ "mean_usual_hours_female",
+    str_detect(`Label (Grouping)`, 
+               "Male") ~ "mean_usual_hours_male",
+    str_detect(`Label (Grouping)`, 
+               "Total") ~ "mean_usual_hours")) %>% select(
+                 !`Label (Grouping)`)
+
+# add fips and columns 
+hours_worked_US <- hours_worked_US %>% rename(
+  value = `United States!!Estimate`) %>%
+  mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation", 
+    state_name = NA, 
+    county_name = NA, 
+    year = "2020", 
+    fips = "00") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+# Bind data 
+hours_worked <- bind_rows(hours_worked, 
+                          hours_worked_state, 
+                          hours_worked_US)
+
+rm(hours_worked_state, hours_worked_US)       
+```
+
+## Travel time to work 
+We gather 2017-2020 data from the U.S. Census Bureau, American Community Survey, B08303  TRAVEL TIME TO WORK. 
+
+https://data.census.gov/cedsci/table?q=b08303&tid=ACSDT5Y2020.B08303
+
+```{r}
+
+# Import data 
+data_dir <- "data/food_preparation/ACSDT5Y.B08303"
+csv_files <- fs::dir_ls(data_dir, regexp = "\\.csv$")
+travel_time <- csv_files %>% map_dfr(read_csv, 
+                                     show_col_types = FALSE,
+                                   na = c("(X)", "-", "**"),
+                                   .id = "source") %>%
+  slice(-1) %>% select(
+    source, GEO_ID, contains("E"))
+  
+# Add data year, fips, and county and state name and rename vars
+travel_time <- travel_time %>% separate(
+  source, c("A", "B", "C", "D"), sep = "/") %>% select(!c(A, B, C)) %>% 
+  separate(D, c("A", "B")) %>% 
+  mutate(
+    year = str_sub(A, -4,-1), 
+    fips = str_sub(GEO_ID, -5, -1)) %>% select(!c(A,B, GEO_ID, NAME)) 
+
+# Pivot longer 
+travel_time <- travel_time %>% pivot_longer(
+  cols = !c(fips, year), 
+  names_to = "variable_code", 
+  values_to = "value")
+
+# Rename variables and add variables of interest
+varnames <- read_csv("data/food_preparation/ACSDT5Y.B08303/metadata/ACSDT5Y2017.B08303_metadata_2022-08-01T185408.csv", 
+                     show_col_types = FALSE) %>% slice(-1) %>% filter(str_detect(id, "Estimate!!")) %>% 
+  mutate(id = ifelse(GEO_ID=="B08303_001E", "total", 
+                     str_remove(id, "Estimate!!Total!!")),
+         id = gsub("[^[:alnum:]]+","_", tolower(id)),
+         id = str_c("travel_time_", id, sep = "")) %>% 
+  rename(variable_code = GEO_ID, 
+         variable_name = id)
+
+travel_time <- travel_time %>% left_join(varnames) %>% 
+  left_join(fips_county) %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+travel_time$value <- as.numeric(travel_time$value)
+    
+# Create variable that is the percentage of total in each category
+travel_time <- travel_time %>% pivot_wider(
+  names_from = variable_name, 
+  values_from = value) %>% mutate(across(
+    travel_time_less_than_5_minutes:travel_time_90_or_more_minutes, 
+    .fns = list(pct = ~./travel_time_total), 
+    names = "{fn}_{col}")) %>% pivot_longer(
+      cols = !c(fips:year), 
+      names_to = "variable_name", 
+      values_to = "value")
+
+# Add state and US data for 2020
+state_travel_time <- read_csv("data/food_preparation/ACSDT5Y.B08303/state_US/ACSDT5Y2020.B08303-2022-09-06T161719_state.csv", 
+                              show_col_types = FALSE) %>% 
+  pivot_longer(
+    !`Label (Grouping)`, 
+    names_to = "state_name", 
+    values_to = "value") %>% mutate(
+      state_name = str_remove(state_name, "!!Estimate"))
+
+# Add variable names 
+state_travel_time <- state_travel_time %>% mutate(
+  variable_name = ifelse(
+    `Label (Grouping)`=="Total:", "_total",
+    gsub("[^[:alnum:]]+","_", 
+         tolower(`Label (Grouping)`))), 
+  variable_name = str_c("travel_time", variable_name, sep = ""), 
+  variable_name = str_squish(variable_name)) %>% 
+  left_join(fips_state) %>% select(
+    fips, state_name, variable_name, value)
+
+# Add percentages
+state_travel_time <- state_travel_time %>% pivot_wider(
+  names_from = variable_name, 
+  values_from = value) %>% mutate(across(
+    travel_time_less_than_5_minutes:travel_time_90_or_more_minutes, 
+    .fns = list(pct = ~./travel_time_total), 
+    names = "{fn}_{col}")) %>% pivot_longer(
+      cols = !c(fips, state_name), 
+      names_to = "variable_name", 
+      values_to = "value")
+
+# Add fips and other variables 
+state_travel_time <- state_travel_time %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation", 
+    county_name = NA, 
+    year = "2020") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+# Add US data 
+US_travel_time <- read_csv("data/food_preparation/ACSDT5Y.B08303/state_US/ACSDT5Y2020.B08303-2022-09-06T161959_US.csv", 
+                           show_col_types = FALSE) %>% 
+  pivot_longer(
+    !`Label (Grouping)`, 
+    names_to = "state_name", 
+    values_to = "value") %>% mutate(
+      state_name = NA, 
+      fips = "00")
+
+# Add variable names 
+US_travel_time <- US_travel_time %>% mutate(
+  variable_name = ifelse(
+    `Label (Grouping)`=="Total:", "_total",
+    gsub("[^[:alnum:]]+","_", 
+         tolower(`Label (Grouping)`))), 
+  variable_name = str_c("travel_time", variable_name, sep = ""), 
+  variable_name = str_squish(variable_name)) %>% 
+  left_join(fips_state) %>% select(
+    fips, state_name, variable_name, value)
+
+# Add percentages
+US_travel_time <- US_travel_time %>% pivot_wider(
+  names_from = variable_name, 
+  values_from = value) %>% mutate(across(
+    travel_time_less_than_5_minutes:travel_time_90_or_more_minutes, 
+    .fns = list(pct = ~./travel_time_total), 
+    names = "{fn}_{col}")) %>% pivot_longer(
+      cols = !c(fips, state_name), 
+      names_to = "variable_name", 
+      values_to = "value")
+
+# Add fips and other variables 
+US_travel_time <- US_travel_time %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation", 
+    county_name = NA, 
+    year = "2020") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+# Bind county, state, US data 
+travel_time <- bind_rows(travel_time, state_travel_time, US_travel_time)
+
+# Meta data - manually add to file 
+metadata <- travel_time %>% mutate(
+  user_friendly_variable_name = gsub("_", " ", str_to_sentence(variable_name)), 
+  user_friendly_variable_name = gsub(
+    "pct", "(%)", user_friendly_variable_name), 
+  `2 pager title` = "Nutrition Security and Food Access") %>% 
+  select(`2 pager title`, category, topic_area, variable_name, 
+         user_friendly_variable_name) %>% distinct(
+           variable_name, .keep_all = TRUE)
+
+write_csv(metadata, "metadata_partial.csv")
+rm(metadata, varnames, state_travel_time, US_travel_time)
+```                                                                
+
+## Commuting characteristics by sex 
+We gather 2017-2020 data on commuting characteristics from the U.S. Census Bureau, American Community Survey, S0801  COMMUTING CHARACTERISTICS BY SEX. 
+
+https://data.census.gov/cedsci/table?q=commuter&tid=ACSST5Y2020.S0801&moe=false&tp=false>
+
+```{r}
+
+# Import data and keep columns of interest 
+data_dir <- "data/food_preparation/ACSST5Y.S0801"
+csv_files <- fs::dir_ls(data_dir, regexp = "\\.csv$")
+commuting <- csv_files %>% map_dfr(read_csv, 
+                                   show_col_types = FALSE,
+                                   na = c("(X)", "-", "**"),
+                                   .id = "source") %>%
+  slice(-1) %>% select(
+    source, GEO_ID, contains("E")) 
+
+# Add data year, fips, and county and state name, rename vars
+commuting <- commuting %>% separate(
+  source, c("A", "B", "C", "D"), sep = "/") %>% select(!c(A, B, C)) %>% 
+  separate(D, c("A", "B")) %>% 
+  mutate(
+    year = str_sub(A, -4,-1), 
+    fips = str_sub(GEO_ID, -5, -1)) %>% select(
+      fips, year, 
+      S0801_C01_001E, S0801_C01_016E, 
+      S0801_C01_017E, S0801_C01_020E, 
+      S0801_C02_001E, S0801_C02_016E, 
+      S0801_C02_017E, S0801_C02_020E,
+      S0801_C03_001E, S0801_C03_016E, 
+      S0801_C03_017E, S0801_C03_020E) %>% rename(
+        total_workers = S0801_C01_001E, 
+        work_inside_state_out_of_county = S0801_C01_016E,
+        work_outside_state = S0801_C01_017E,
+        work_outside_place_of_residence = S0801_C01_020E, 
+        total_workers_male = S0801_C02_001E, 
+        work_inside_state_out_of_county_male = S0801_C02_016E,
+        work_outside_state_male = S0801_C02_017E,
+        work_outside_place_of_residence_male = S0801_C02_020E, 
+        total_workers_female = S0801_C03_001E, 
+        work_inside_state_out_of_county_female = S0801_C03_016E,
+        work_outside_state_female = S0801_C03_017E,
+        work_outside_place_of_residence_female = S0801_C03_020E) %>%
+  mutate(across(total_workers:
+                  work_outside_place_of_residence_female, 
+                as.numeric))
+
+# Add percentages and county/state names
+commuting <- commuting %>% mutate(across(
+  work_inside_state_out_of_county:work_outside_place_of_residence, 
+  .fns = list(pct = ~./total_workers), 
+  names = "{fn}_{col}")) %>% mutate(across(
+  work_inside_state_out_of_county_male:
+    work_outside_place_of_residence_male, 
+  .fns = list(pct = ~./total_workers_male), 
+  names = "{fn}_{col}")) %>% mutate(across(
+  work_inside_state_out_of_county_female:
+    work_outside_place_of_residence_female, 
+  .fns = list(pct = ~./total_workers_female), 
+  names = "{fn}_{col}")) %>% left_join(fips_county) %>%
+  select(!c(total_workers, total_workers_male, 
+            total_workers_female, state))
+
+# Pivot longer 
+commuting <- commuting %>% pivot_longer(
+  cols = !c(fips, year, state_name, county_name), 
+  names_to = "variable_name", 
+  values_to = "value") %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Preparation") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+```
+
+## Food Insecurity 
+We gather data from 2019 from Feeding America Map the Meal Gap. We emailed, research@feedingamerica.org, to get access to the full data files. 
+
+https://public.tableau.com/app/profile/feeding.america.research/viz/MaptheMealGap-TheEconomicDriversofFoodInsecurity/CorrelationofFactors
+
+```{r food_insecurity}
+
+# Import data 
+mmg <- read_xlsx("data/food_insecurity/map_the_meal_gap_data/MMG2021_2019Data_ToShare.xlsx", sheet = "2019 County") %>% 
+  clean_names() %>% mutate(
+  fips = str_pad(fips, pad = "0", width = 5, side = "left"), 
+  year = "2019") %>% 
+  rename(child_food_insecurity_rate = 
+         x2019_child_food_insecurity_rate, 
+         food_insecurity_rate = 
+           x2019_food_insecurity_rate) %>% select(
+           fips, year, child_food_insecurity_rate, food_insecurity_rate) %>% left_join(fips_county) %>% select(!state)
+
+# Add state-level data 
+mmg_state <- read_xlsx("data/food_insecurity/map_the_meal_gap_data/MMG2021_2019Data_ToShare.xlsx", sheet = "2019 State") %>% 
+  clean_names() %>% mutate(
+  fips = str_pad(fips, pad = "0", width = 2, side = "left"), 
+  year = "2019") %>% 
+  rename(child_food_insecurity_rate = 
+         x2019_child_food_insecurity_rate, 
+         food_insecurity_rate = 
+           x2019_food_insecurity_rate) %>% select(
+           fips, year, child_food_insecurity_rate, food_insecurity_rate) %>% left_join(fips_state) %>% mutate(
+             county_name = NA)
+
+# Bind county and state data 
+mmg <- bind_rows(mmg, mmg_state)
+
+# Add columns 
+mmg <- mmg %>% pivot_longer(
+  !c(fips, year, state_name, county_name), 
+  names_to = "variable_name", 
+  values_to = "value") %>% mutate(
+    category = "Food Access", 
+    topic_area = "Food Insecurity") %>% select(
+      fips, county_name, state_name, category, 
+      topic_area, year, variable_name, value)
+
+rm(mmg_state)
+```
+
+## Poverty status
+We gather 2020 data from the U.S. Census Bureau, American Community Survey, S1701  POVERTY STATUS IN THE PAST 12 MONTHS.  
+
+https://data.census.gov/cedsci/table?q=S1701%3A%20POVERTY%20STATUS%20IN%20THE%20PAST%2012%20MONTHS&g=0100000US%240500000&y=2020&tid=ACSST5Y2020.S1701
+
+We do not collected data for UNRELATED INDIVIDUALS FOR WHOM POVERTY STATUS IS DETERMINED, or for the number of individuals at a certain percentage of the poverty level. 
+
+```{r}
+
+# Read in metadata and keep variables of interest
+poverty_meta <- read_csv("data/population_characteristic/ACSST5Y2020.S1701/ACSST5Y2020.S1701-Column-Metadata.csv") %>% 
+  slice(-1, -2) %>% filter(
+    str_ends(`Column Name`, "E") &
+      !str_detect(Label, 
+                "UNRELATED INDIVIDUALS FOR WHOM POVERTY STATUS IS DETERMINED") &
+      !str_detect(Label, 
+                 "Total!!") & 
+      !str_detect(Label, 
+                   "ALL INDIVIDUALS WITH INCOME BELOW THE FOLLOWING POVERTY")) %>%
+  rename(variable_code = `Column Name`, 
+       variable_name = Label) %>% mutate(
+         variable_name = str_remove(variable_name, "Estimate!!"), 
+         variable_name = str_remove(variable_name, "Population for whom poverty status is determined!!"))
+
+# Make variable names
+poverty_meta <- poverty_meta %>% separate(
+  variable_name, 
+  into = c("A", "B", "C", "D", "E"), 
+  sep = "!!") %>% filter(!is.na(C) & is.na(E)) %>% mutate(
+    E = case_when(
+      is.na(D) ~ tolower(C), 
+      !is.na(D) ~ tolower(D)), 
+    A = case_when(
+      A=="Below poverty level" ~ A, 
+      A=="Percent below poverty level" ~ 
+        "Below poverty level, percent")) %>% unite(
+        "user_friendly_variable_name", 
+        c(A, E), sep = ", ", remove = FALSE) %>% mutate(
+  A = str_remove(A, ",")) %>% unite(
+          "variable_name", 
+          c(A, E), sep = "_") %>% mutate(
+           variable_name = gsub(
+             "[^[:alnum:]]", "_", tolower(variable_name))) %>%
+  select(variable_code, user_friendly_variable_name, variable_name)
+
+# Add columns 
+poverty_meta <- poverty_meta %>% mutate(
+  `2 pager title` = "Nutrition Security and Food Access", 
+  category = "Food Access", 
+  topic_area = "Population Characteristic",
+  periodicity = "Yearly",
+  aggregation = ifelse(
+    str_detect(variable_name, "percent"), "Percent", "Count"), 
+  format = ifelse(str_detect(variable_name, "percent"), "percent", "integer"),
+  A = str_remove(user_friendly_variable_name, "percent, "),
+  variable_definition = case_when(
+    aggregation=="Percent" ~ str_c("Percent of people ", 
+                                   tolower(A), 
+                                   " for whom poverty status is determined"), 
+    aggregation=="Count" ~ str_c("Number of people ", 
+                                   tolower(A), 
+                                   " for whom poverty status is determined"))) %>%
+  select(
+    `2 pager title`, category, topic_area, variable_name, 
+    user_friendly_variable_name, variable_definition, 
+    periodicity, aggregation, format, variable_code)
+
+write_csv(poverty_meta, "poverty_meta_temp.csv")
+
+# Import data 
+poverty <- read_csv("data/population_characteristic/ACSST5Y2020.S1701/ACSST5Y2020.S1701-Data.csv", na = c("(X)", "-", "null")) %>% slice(-1) %>% mutate(
+  fips = str_sub(GEO_ID, -5, -1)) %>% select(!c(GEO_ID, NAME)) %>% pivot_longer(
+    cols = !fips, 
+    names_to = "variable_code", 
+    values_to = "value") 
+
+poverty$value <- as.numeric(poverty$value)
+
+# Join variable names to data 
+poverty <- left_join(poverty_meta, poverty)  
+
+# Divide percents by 100
+poverty <- poverty %>% mutate(
+  value = ifelse(aggregation == "Percent", value/100, value))
+
+# Add columns 
+poverty <- poverty %>% left_join(fips_county) %>%
+  mutate(year = "2020") %>% select(
+    fips, county_name, state_name, category,
+    topic_area, year, variable_name, value)
+
+rm(poverty_meta)
+```
+
+## Population 60 and over 
+We gather data 2020 from the U.S. Census Bureau, American Community Survey, S0101  AGE AND SEX. 
+
+https://data.census.gov/cedsci/table?q=popoulation%20by%20age%20&g=0100000US%240500000&y=2020&tid=ACSST5Y2020.S0101
+
+```{r}
+
+# Import data
+pop_over60 <- read_csv(
+  "data/population_characteristic/ACSST5Y2020.S0101/ACSST5Y2020.S0101_data_with_overlays_2022-08-04T165849.csv", 
+  na = "*****") %>% slice(-1) %>% mutate(
+      fips = str_sub(GEO_ID, -5, -1)) %>% select(
+    fips, S0101_C01_001E, S0101_C01_014E, 
+    S0101_C01_015E, S0101_C01_016E, S0101_C01_017E, 
+    S0101_C01_018E, S0101_C01_019E) %>% mutate(across(
+  S0101_C01_001E:S0101_C01_019E, as.numeric))
+
+# Create over 60 column and percentages
+pop_over60 <- pop_over60 %>% mutate(
+  over_60 = S0101_C01_014E + S0101_C01_015E + S0101_C01_016E + 
+    S0101_C01_017E + S0101_C01_018E + S0101_C01_019E, 
+  over_60_percent = over_60/S0101_C01_001E) %>% select(
+    fips, over_60, over_60_percent)
+  
+# Pivot longer and add columns 
+pop_over60 <- pop_over60 %>% pivot_longer(
+  !fips, 
+  names_to = "variable_name", 
+  values_to = "value") %>% left_join(fips_county) %>% mutate(
+  category = "Food Access", 
+  topic_area = "Population Characteristic", 
+  year = "2020") %>% select(
+    fips, county_name, state_name, category, topic_area, 
+    year, variable_name, value)
+
+```
+
+
+## Disability by age, race/ethnicity, and gender
+We gather 2020 data from the U.S. Census Bureau, American Community Survey, S1810  DISABILITY CHARACTERISTICS.  
+
+https://data.census.gov/cedsci/table?q=disability%20status&g=0100000US%240500000&tid=ACSST5Y2020.S1810
+
+
+```{r}
+
+# Import metadata and keep variables of interest
+dis_metadata <- read_csv("data/population_characteristic/ACSST5Y2020.S1810/ACSST5Y2020.S1810_metadata_2022-08-05T150357.csv") %>% filter(
+  (str_detect(id, "Estimate!!With a disability!!") | 
+    str_detect(id, "Estimate!!Percent with a disability!!")) & 
+    !str_detect(id, "DISABILITY TYPE BY DETAILED AGE!!")) %>% mutate(
+      id = str_remove(id, "Estimate!!"))
+
+# Create variable names 
+dis_metadata <- dis_metadata %>% rename(
+  variable_code = GEO_ID) %>% 
+  separate(
+  id, c("A", "B", "C", "D"), sep = "!!", remove = FALSE) %>% mutate( 
+    D = ifelse(is.na(D), "total", D), 
+    E = case_when(
+      A=="With a disability" ~ "Disability", 
+      A=="Percent with a disability" ~ "Disability, percent")) %>% unite(
+        "user_friendly_variable_name", 
+        c(E, D), sep = ", ", remove = FALSE) %>% mutate(
+          E = str_remove(E, ",")) %>% unite(
+          "variable_name", c(E, D), sep = " ", remove = FALSE) %>% mutate(
+            variable_name = gsub(
+             "[^[:alnum:]]", "_", tolower(variable_name)), 
+            variable_name = str_remove(
+              variable_name, "__of_any_race_")) %>% select(
+            variable_code, variable_name, user_friendly_variable_name)
+
+# Add columns 
+dis_metadata <- dis_metadata %>% mutate(
+  `2 pager title` = "Nutrition Security and Food Access", 
+  category = "Food Access", 
+  topic_area = "Population Characteristic", 
+  periodicity = "Yearly", 
+  aggregation_method = ifelse(
+    str_detect(variable_name, "percent"), "Percent", "Count"), 
+  format = ifelse(aggregation_method=="Percent", "percent", "integer"))
+  
+# Add variable definition 
+dis_metadata <- dis_metadata %>% mutate(
+  variable_definition = case_when(
+    format == "integer" ~ str_c(
+      "Civilian noninstitutionalized population with a disability", 
+      str_remove(user_friendly_variable_name, "Disability")), 
+    format=="percent" ~ str_c(
+      "Percent of civilian noninstitutionalized population with a disability", 
+      str_remove(user_friendly_variable_name, "Disability")))) %>% select(
+        `2 pager title`, category, topic_area, variable_name,
+        user_friendly_variable_name, 
+        variable_definition, periodicity, aggregation_method, format, 
+        variable_code)
+    
+write_csv(dis_metadata, "dis_meta_temp.csv")
+
+#Import data 
+dis <- read_csv("data/population_characteristic/ACSST5Y2020.S1810/ACSST5Y2020.S1810_data_with_overlays_2022-08-05T150357.csv") %>% slice(-1) %>% mutate(
+  fips = str_sub(GEO_ID, -5, -1)) %>% select(!c(GEO_ID, NAME)) %>% 
+  pivot_longer(
+    cols = !fips, 
+    names_to = "variable_code", 
+    values_to = "value")
+
+# Join with metadata and divide percent by 100
+dis <- left_join(dis_metadata, dis) %>% mutate(
+  value = as.numeric(value), 
+  value = ifelse(
+    format == "percent", value/100, value))
+
+# Join with county data and select columns of interest
+dis <- dis %>% left_join(fips_county) %>% mutate(
+  year = "2020") %>% select(
+    fips, county_name, state_name, category, topic_area, year, 
+    variable_name, value)
+
+rm(dis_metadata)
+```
+
+## School enrollment by grade level
+We gather 2020 data from the U.S. Census Bureau, American Community Survey, S1401  SCHOOL ENROLLMENT. 
+
+https://data.census.gov/cedsci/table?q=enrollment&g=0100000US%240500000&tid=ACSST5Y2020.S1401&moe=false
+
+```{r}
+
+# Read in metadata 
+school_meta <- read_csv("data/population_characteristic/ACSST5Y2020.S1401/ACSST5Y2020.S1401_metadata_2022-08-05T152256.csv") %>% filter(
+  str_detect(id, "Estimate!!") & 
+    !(str_detect(id, "Males|Females|public school| private school"))) %>% rename(variable_code = GEO_ID)
+
+# Create variable names 
+school_meta <- school_meta %>% mutate(
+  id = str_remove(id, "Estimate!!")) %>% separate(
+    id, c("A", "B", "C", "D"), sep = "!!") %>% mutate(
+      C = gsub(",", " and", C), 
+      C = ifelse(C=="Kindergarten to 12th grade", D, C), 
+      C = ifelse(A=="Percent", str_c(C, ", percent"), C), 
+      user_friendly_variable_name = ifelse(
+        B =="Population 3 years and over enrolled in school",
+        str_c("School enrollment, population 3 years and over, ",
+              tolower(C)),
+        str_c("School enrollment, ", 
+              tolower(str_remove(C, " enrolled in school")))), 
+      variable_name = gsub(",", "", user_friendly_variable_name),
+      variable_name = gsub(":", "", variable_name), 
+      variable_name = gsub(
+             "[^[:alnum:]]", "_",
+             tolower(variable_name)), 
+      C = tolower(C)) %>% unite(
+        "variable_definition", c(B, C), sep = ", ") %>% 
+  filter(!is.na(variable_name))
+
+# Add columns   
+school_meta <- school_meta %>% mutate(
+  `2 pager title` = "Nutrition Security and Food Access", 
+  category = "Food Access", 
+  topic_area = "Population Characteristic", 
+  periodicity = "Yearly", 
+  aggregation_method = case_when(
+    A=="Total" ~ "Count", 
+    A=="Percent" ~ "Percent"), 
+  format = case_when(
+    A=="Total" ~ "integer", 
+    A== "Percent" ~ "percent")) %>% select(
+      `2 pager title`, category, topic_area, 
+      variable_name, user_friendly_variable_name, 
+      variable_definition, periodicity, 
+      aggregation_method, format, variable_code)
+write_csv(school_meta, "school_meta_temp.csv")
+  
+# Read in data 
+school <- read_csv("data/population_characteristic/ACSST5Y2020.S1401/ACSST5Y2020.S1401_data_with_overlays_2022-08-05T152256.csv") %>% slice(-1) %>% mutate(
+  fips = str_sub(GEO_ID, -5, -1)) %>% 
+  select(!c(GEO_ID, NAME)) %>% 
+  pivot_longer(
+    cols = !fips, 
+    names_to = "variable_code", 
+    values_to = "value")
+
+# Join with metadata and divide percent by 100
+school <- left_join(school_meta, school) %>% mutate(
+  value = as.numeric(value), 
+  value = ifelse(
+    format == "percent", value/100, value))
+
+# Join with county data and select columns of interest
+school <- school %>% left_join(fips_county) %>% mutate(
+  year = "2020") %>% select(
+    fips, county_name, state_name, category, topic_area, year, 
+    variable_name, value)
+
+rm(school_meta, fips_county, fips_state, csv_files, data_dir, variables)
+```
+
+## Bind all food access data 
+
+```{r}
+
+# Bind data and remove old data frames 
+food_access <- bind_rows(
+  commuting, dis, food_atlas, 
+  hours_worked, mmg, pop_over60, 
+  poverty, school, snap_par, 
+  snap_race, travel_time, wic)
+
+rm(commuting, dis, food_atlas, 
+  hours_worked, mmg, pop_over60, 
+  poverty, school, snap_par, 
+  snap_race, travel_time, wic)
+
+# Remove observations without data 
+food_access <- food_access %>% filter(
+  !is.na(value))
+
+# Write final data file
+write_csv(food_access, "food_access.csv")
+
+```

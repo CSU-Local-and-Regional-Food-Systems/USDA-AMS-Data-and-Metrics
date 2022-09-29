@@ -1,0 +1,576 @@
+---
+title: "Capitals - updated"
+author: "Allie Bauman"
+date: '2022-07-13'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Indicators of Community Wealth 
+
+We first import the data set and modify the data as described in Schmitt et al. (2021) do file to make variables per capita, etc. We keep the variables of interest, add a year variable and organize data by capital type into separate csv files. 
+
+We use the CapitalPCs file from the GitHub site for the Schmitt et al. (2021) paper that developed these indicators to obtain the principal components. https://github.com/schmi-ny/County-Level-Community-Capital-Stocks/blob/main/CapitalPCs061521.xlsx
+
+These data and capitals were then updated to include additional years of data. While we do include the additional years of data here, the principal component measures of capitals are based on the original data, as provided in Schmitt et al. (2021). 
+
+The file called "capitals_new.csv" contains all of the oringial data used in Schmitt et al. (2021) plus additional years of older data that was collected based on data availability. We use the data in this file and join the principal component measures of capitals from Schmitt et al. (2021) to provide the final data set for each capital type.
+
+Where possible, we will aggregate data by the state and national level to be used for comparison. All aggregation will take place before variables are converted to per capita or similar measures. Principal components will not be available at the state or national level. 
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(tidycensus)
+
+# Import data
+aeppPCs <- read_xlsx("data/CapitalPCs061521.xlsx") %>% select(
+  fips1, pc1b_manufacturing:pc2s_publicvoiceparticipation) %>% mutate(
+  fips1 = str_pad(fips1, pad = "0", width = 5, side = "left"))
+
+capitals <- read_csv("data/capitals_new.csv", 
+                     show_col_types = FALSE) %>% mutate(
+  fips1 = str_pad(fips1, pad = "0", width = 5, side = "left"))
+
+# Join principal components to capitals data
+capitals <- left_join(capitals, aeppPCs, by = "fips1") 
+
+# Keep fips1 and rename as fips2
+capitals <- capitals %>% select(-c(fips, fips2)) %>% rename(
+    fips = fips1) 
+
+# Get state fips codes
+state_fips <- fips_codes %>% select(state_name, state_code) %>% 
+  distinct() %>% rename(state = state_name)
+
+rm(aeppPCs)
+```
+
+## Built capital
+
+Built capital includes: foodbev_est_CBP, est_CBP, broad, broad_11, highway_km, pc1b_manufacturing, and pc2b_infrastructure.
+
+broad, broad_11, and highway_km are not able to be presented for state/national comparisons. Both broadband measures are already per capita and highway_km is calculated such that aggregating up does not make sense. 
+
+```{r built}
+
+# Select data of interest for county level
+built_county <- capitals %>% select(
+  fips, foodbev_est_CBP_15, est_CBP_15, 
+  foodbev_est_CBP_10, est_CBP_10,
+  broad, broad_prct, broad_11, highway_km, highway_popwtdist,
+  pop_15_CBP, pop_10_CBP_new, 
+  pc1b_manufacturing, pc2b_infrastructure)
+
+# Summarise data at the state level
+built_state <- capitals %>% group_by(state) %>% select(
+  foodbev_est_CBP_15, est_CBP_15, foodbev_est_CBP_10, est_CBP_10,
+  pop_15_CBP, pop_10_CBP_new) %>% summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
+      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
+        state_code, foodbev_est_CBP_15:pop_10_CBP_new)  %>% rename(
+          fips = state_code)
+
+# Summarise data at the US level
+built_us <- built_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
+  fips = "00")
+
+ # Bind data so we have one data frame with US, state, and county level data
+built<- bind_rows(built_county, built_state, built_us)
+rm(built_county, built_state, built_us)
+
+# Express all variables in per-capita or per-square mile (code taken from AEPP do file)
+built <- built %>% mutate(
+  foodbev_est_CBP_15=10000*foodbev_est_CBP_15/pop_15_CBP,
+  est_CBP_15=10000*est_CBP_15/pop_15_CBP, 
+  foodbev_est_CBP_10=10000*foodbev_est_CBP_10/pop_10_CBP_new,
+  est_CBP_10=10000*est_CBP_10/pop_10_CBP_new,
+  broad = broad_prct,
+  broad_11 = broad_11,
+  highway_km=1/(highway_popwtdist/1000)) %>% rename(
+    broad_16 = broad)
+
+# Add year variable
+built1 <- built %>% select(fips, foodbev_est_CBP_10, foodbev_est_CBP_15) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "foodbev_est_CBP_",
+  values_to = "foodbev_est_CBP") 
+
+built2 <- built %>% select(fips, est_CBP_10, est_CBP_15) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "est_CBP_", 
+  values_to = "est_CBP")
+
+built3 <- built %>% select(fips, broad_16) %>% mutate(
+  year = "16")
+
+built4 <- built %>% select(fips, broad_11) %>% mutate(
+  year = "11")
+
+built5 <- built %>% select(fips, highway_km) %>% mutate(
+  year = "07")
+
+built6 <- built %>% select(fips, pc1b_manufacturing, pc2b_infrastructure) %>% mutate(
+  year = "2021")
+
+# Join data
+built <- purrr::reduce(list(built1, built2, built3, built4, built5, built6), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
+
+built <- built %>% mutate(
+  year = str_pad(year, side = "left", pad = "0" , width = 3), 
+  year = str_pad(year, side = "left", pad = "2", width = 4))
+
+rm(built1, built2, built3, built4, built5, built6)
+
+# Pivot longer
+built <- built %>% pivot_longer(
+  cols = !c(fips, year), 
+  values_to = "value", 
+  names_to = "variable_name") %>% filter(!is.na(value))
+
+# Create column topic area 
+built <- built %>% mutate(
+  topic_area = ifelse(
+    variable_name == "est_CBP" | 
+      variable_name =="foodbev_est_CBP", "Food Processors", "Infrastructure"))
+
+```
+
+## Cultural capital
+
+Cultural capital includes create_jobs, racial_div, pub_lib, create_indus_09, create_indus_14, museums, pc1c_artsdiversity and pc2c_creativeindustries. 
+
+The following are NOT calculated at the state/national level. 
+racial_div is not seeming to work well at the state/national level. The variable is divided by 833.33 and maybe this is what is making it not work. pub_lib, create_indus_09, create_indus_14, and museums cannot be aggregated up to the state/national level because they are per 10,000 people. 
+
+```{r cultural}
+
+# Select variables to be used in county level 
+cultural_county <- capitals %>% select(
+  fips, create_jobs, total_emp, White_not_Latino2010,African_American2010,
+  Native_American2010, Asian_American2010, Other2010, Latino2010, pub_lib, create_indus_09, create_indus_14, museums, pc1c_artsdiversity, pc2c_creativeindustries)
+
+# Create state-level variables
+cultural_state <- capitals %>% group_by(state) %>% select(
+  state, create_jobs, total_emp) %>% summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
+      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
+        state_code, create_jobs, total_emp)  %>% rename(
+          fips = state_code) 
+
+# Create national-level variables
+cultural_us <- cultural_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
+  fips = "00")
+
+ # Bind data so we have one data frame with US, state, and county level data
+cultural <- bind_rows(cultural_county, cultural_state, cultural_us)
+rm(cultural_county, cultural_state, cultural_us)
+
+# Express variables in per-capita or per-square mile (code taken from AEPP do file)
+cultural <- cultural  %>%  mutate(
+  create_jobs= create_jobs/total_emp,
+  racial_div = (10000- (White_not_Latino2010^2 +	African_American2010^2 + Native_American2010^2 + Asian_American2010^2 + Other2010^2 + Latino2010^2))/833.333333333333)
+
+cult1 <- cultural %>% select(fips, create_jobs) %>% mutate(
+  year = "2013")
+cult2 <- cultural %>% select(fips, racial_div) %>% mutate(
+  year = "2010")
+cult3 <- cultural %>% select(fips, pub_lib) %>% mutate(
+  year = "2012")
+cult4 <- cultural %>% select(fips, create_indus_09, create_indus_14) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "create_indus_",
+  values_to = "create_indus") %>% mutate(
+    year = str_pad(year, side = "left", pad = "0" , width = 2),
+    year = str_pad(year, side = "left", pad = "0" , width = 3),
+    year = str_pad(year, side = "left", pad = "2", width = 4))
+
+cult5 <- cultural %>% select(fips, museums) %>% mutate(
+  year = "2015")
+cult6 <- cultural %>% select(fips, pc1c_artsdiversity, pc2c_creativeindustries) %>% mutate(
+  year = "2021")
+
+# Join data
+cultural <- purrr::reduce(list(cult1,cult2, cult3, cult4, cult5, cult6), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) %>% select(fips, year, everything())
+
+rm(cult1,cult2, cult3, cult4, cult5, cult6)
+
+# Pivot longer
+cultural <- cultural %>% pivot_longer(
+  cols = !c(fips, year), 
+  values_to = "value", 
+  names_to = "variable_name") %>% filter(!is.na(value))
+
+# Add topic area
+cultural <- cultural %>% mutate(
+  topic_area = ifelse(
+    variable_name=="racial_div", "Population", "Community Resources"))
+
+```
+
+## Financial capital 
+
+Financial capital includes localgovfin_07, localgovfin_12, 
+owner_occupied_2010, owner_occupied_2012, and pc1f. 
+
+```{r financial}
+
+# Financial variables at the county level
+financial_county <- capitals %>% select(
+  fips, localgovfin_07, localgovfin_12, 
+  deposits, owner_occupied_2010, owner_occupied_2012,
+  pop_10_CBP_new, pop_12, pop_15_CBP, pc1f)
+
+# Financial variables at the state level
+financial_state <- capitals %>% group_by(state) %>% select(
+  localgovfin_07, localgovfin_12, 
+  deposits, owner_occupied_2010, owner_occupied_2012,
+  pop_10_CBP_new, pop_12, pop_15_CBP) %>% summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
+      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
+        state_code, localgovfin_07:pop_15_CBP)  %>% rename(
+          fips = state_code)
+
+# Summarise data at the US level
+financial_us <- financial_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
+  fips = "00")
+
+ # Bind data so we have one data frame with US, state, and county level data
+financial <- bind_rows(financial_county, financial_state, financial_us)
+rm(financial_county, financial_state, financial_us)
+
+
+# Express variables in per-capita or per-square mile (code taken from AEPP do file)
+financial <- financial %>% mutate(
+  localgovfin_07 = localgovfin_07/pop_10_CBP_new, 
+  localgovfin_12 = localgovfin_12/pop_12,
+  deposits = deposits/pop_15_CBP,
+  owner_occupied_2010 = owner_occupied_2010/pop_10_CBP_new, 
+  owner_occupied_2012 = owner_occupied_2012/pop_12)
+
+# Add year variables
+fin1 <- financial %>% select(
+  fips, localgovfin_07, localgovfin_12) %>% pivot_longer(
+    cols = !fips, 
+    names_to = "year", 
+    names_prefix = "localgovfin_",
+    values_to = "localgovfin")  %>% mutate(
+  year = str_pad(year, side = "left", pad = "0" , width = 3), 
+  year = str_pad(year, side = "left", pad = "2", width = 4))
+
+fin2 <- financial %>% select(
+  fips, owner_occupied_2010, owner_occupied_2012) %>% pivot_longer(
+    cols = !fips, 
+    names_to = "year", 
+    values_to = "owner_occupied", 
+    names_prefix = "owner_occupied_")
+
+fin3 <- financial %>% select(fips, deposits) %>% mutate(
+  year = "2016")
+
+fin4 <- financial %>% select(fips, pc1f) %>% mutate(
+  year = "2021")
+
+# Join data
+financial <- purrr::reduce(list(fin1, fin2, fin3, fin4), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
+rm(fin1, fin2, fin3, fin4)
+
+# Pivot longer
+financial <- financial %>% pivot_longer(
+  cols = !c(fips, year), 
+  values_to = "value", 
+  names_to = "variable_name") %>% filter(!is.na(value)) %>% mutate(
+    topic_area = "Financial")
+
+```
+
+## Human capital 
+
+Human capital includes ed_attain_10, ed_attain_15, health_factors, health_outcomes, rood_secure_rev, food_secure_10, insured_13, insured_10,  primary_care_17,  primary_care_10, pc1h_healtheducation, pc2h_medicalfoodsecurity. Note, food_secure_rev is from 2014
+
+Note that ed_attain for 2010 is already a percentage, so don't need to divide by population. 
+
+Variables we cannot provide state and national totals include ed_attain_10, food_secure_rev, food_secure_10, insured_13, insured_10 as they are provided as percentages. 
+
+```{r human}
+
+# County level data 
+human_county <- capitals %>% select(
+  fips,
+  ed_attain_10, ed_attain_15,
+  health_factors, health_outcomes,
+  food_secure_rev, food_secure_10, 
+  insured_13, insured_10,
+  primary_care_17, primary_care_10,
+   pop_10_CBP_new, pop_15_CBP, adult_pop_15, 
+  pc1h_healtheducation, pc2h_medicalfoodsecurity)
+
+# State level data
+human_state <- capitals %>% group_by(state) %>% select(
+  ed_attain_15, primary_care_17, primary_care_10) %>% summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
+      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
+        state_code, ed_attain_15, primary_care_17, primary_care_10)  %>% rename(
+          fips = state_code)
+
+# Summarize data at the US level
+human_us <- human_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
+  fips = "00")
+
+ # Bind data so we have one data frame with US, state, and county level data
+human <- bind_rows(human_county, human_state, human_us)
+rm(human_county, human_state, human_us)
+
+# Express variables in per-capita or per-square mile (code taken from AEPP do file)
+human <- human %>% mutate(
+  ed_attain_10 = ed_attain_10/100, 
+  ed_attain_15 = ed_attain_15/adult_pop_15, 
+  food_secure_rev= food_secure_rev, 
+  food_secure_10 = food_secure_10, 
+  insured_13 = insured_13, 
+  insured_10 = insured_10, 
+  primary_care_17=10000*primary_care_17/pop_15_CBP, 
+  primary_care_10=10000*primary_care_10/pop_10_CBP_new) %>% 
+  rename(food_secure_14 = food_secure_rev)
+
+hum1 <- human %>% select(fips, ed_attain_10, ed_attain_15) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "ed_attain_", 
+  values_to = "ed_attain")
+
+hum2 <- human %>% select(fips, health_factors, health_outcomes) %>% mutate(
+  year = "2013")
+
+hum3 <- human %>% select(fips, food_secure_10, food_secure_14) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "food_secure_", 
+  values_to = "food_secure")
+
+hum4 <- human %>% select(fips, insured_10, insured_13) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "insured_", 
+  values_to = "insured")
+
+hum5 <- human %>% select(fips, primary_care_10, primary_care_17) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "primary_care_", 
+  values_to = "primary_care")
+
+hum6 <- human %>% select(fips, pc1h_healtheducation, pc2h_medicalfoodsecurity) %>% mutate(
+  year = "2021")
+
+# Join data
+human <- purrr::reduce(list(hum1, hum2, hum3, hum4, hum5, hum6), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
+
+human <- human %>% mutate(
+  year = str_pad(year, side = "left", pad = "0" , width = 3), 
+  year = str_pad(year, side = "left", pad = "2", width = 4))
+
+#write_csv(human, "community_wealth/human_capital.csv")
+rm(hum1, hum2, hum3, hum4, hum5)
+
+# Pivot longer
+human <- human %>% pivot_longer(
+  cols = !c(fips, year), 
+  values_to = "value", 
+  names_to = "variable_name") %>% filter(!is.na(value)) 
+
+# Add topic areas
+human <- human %>% mutate(
+  topic_area = case_when(
+    variable_name=="pc1h_healtheducation" |
+      variable_name=="pc2h_medicalfoodsecurity" |
+    variable_name=="ed_attain" |
+      variable_name=="insured" ~ "Population", 
+    variable_name=="food_secure" ~ "Food Insecurity", 
+    variable_name=="primary_care" ~ "Community Resources"))
+
+```
+
+## Natural capital 
+
+Natural capital includes natamen_scale, prime_farmland, conserve_acre, acre_FSA, acre_NFS, pc1n_naturalamenitiesconservation, and pc2n_farmland. 
+
+
+natamen_scale not provided at the state/national level. 
+
+```{r natural}
+
+# County level data
+natural_county <- capitals %>% select(
+  fips, natamen_scale, prime_farmland, conserve_acre, acre_FSA, acre_NFS, pc1n_naturalamenitiesconservation, pc2n_farmland, 
+  acres, acre_all)
+
+# State level data
+natural_state <- capitals %>% group_by(state) %>% select(
+  prime_farmland, conserve_acre, acre_FSA, acre_NFS,  
+  acres, acre_all) %>% summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
+      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
+        state_code, prime_farmland:acre_all)  %>% rename(
+          fips = state_code)
+
+# Summarise data at the US level
+natural_us <- natural_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
+  fips = "00")
+
+ # Bind data so we have one data frame with US, state, and county level data
+natural <- bind_rows(natural_county, natural_state, natural_us)
+rm(natural_county, natural_state, natural_us)
+
+# Express variables in per-acre (code taken from AEPP do file)
+natural <- natural %>% mutate(
+  prime_farmland=prime_farmland/acres, 
+  conserve_acre=conserve_acre/acre_all, 
+  acre_FSA = acre_FSA/acre_all, 
+  acre_NFS = acre_NFS/acre_all)
+
+nat1 <- natural %>% select(fips, prime_farmland) %>% mutate(year="2012")
+nat2 <- natural %>% select(fips, conserve_acre) %>% mutate(year="2016")
+nat3 <- natural %>% select(fips, acre_FSA, acre_NFS) %>% mutate(year = "2017") 
+nat4 <- natural %>% select(fips, natamen_scale) %>% mutate(year = "1999")
+nat5 <- natural %>% select(fips, pc1n_naturalamenitiesconservation, pc2n_farmland) %>% mutate(year = NA)
+
+# Join data
+natural<- purrr::reduce(list(nat1, nat2, nat3, nat4, nat5), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) %>% select(fips, year, everything())
+
+#write_csv(natural, "community_wealth/natural_capital.csv")
+rm(nat1, nat2, nat3, nat4, nat5) 
+
+# Pivot longer
+natural <- natural %>% pivot_longer(
+  cols = !c(fips, year), 
+  values_to = "value", 
+  names_to = "variable_name") %>% filter(!is.na(value)) 
+
+# Add topic areas
+natural <- natural %>% mutate(
+  topic_area = ifelse(
+    variable_name=="prime_farmland", "Agriculture", "Natural"))
+```
+
+## Social-political capital 
+
+Social political capital includes nccs09, nccs14, pvote08, pvote12, respn10, assn09, assn14, 
+pc1s_nonprofitsocialindustries, and pc2s_publicvoiceparticipation.  
+
+
+```{r socpol}
+
+# County level data 
+socpol_county <- capitals %>% select(
+  fips, nccs09, nccs14, pvote08, pvote12, respn10, assn09, assn14, 
+pc1s_nonprofitsocialindustries, pc2s_publicvoiceparticipation, 
+pop09,pop_14)
+
+socpol_state <- capitals %>% group_by(state) %>% select(
+  nccs09, nccs14, pop09, pop_14)%>% summarise_all(
+    ~sum(.x, na.rm = TRUE)) %>% mutate(across(
+      state, ~str_to_title(.x))) %>% left_join(state_fips) %>% select(
+        state_code, nccs09:pop_14)  %>% rename(
+          fips = state_code)
+
+# Summarise data at the US level
+socpol_us <- socpol_state %>% summarise(across(!fips, ~sum(.x))) %>% mutate(
+  fips = "00")
+
+ # Bind data so we have one data frame with US, state, and county level data
+socpol <- bind_rows(socpol_county, socpol_state, socpol_us)
+rm(socpol_county, socpol_state, socpol_us)
+
+# Make per capita, etc. (code taken from AEPP do file)
+socpol <- socpol %>% mutate(
+  nccs09 = 1000*nccs14/pop09, 
+  nccs14 = 1000*nccs14/pop_14)
+
+sp1 <- socpol %>% select(fips, nccs09, nccs14) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "nccs", 
+  values_to = "nccs")
+
+sp2 <- socpol %>% select(fips, pvote08, pvote12) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "pvote", 
+  values_to = "pvote")
+
+sp3 <- socpol %>% select(fips, respn10) %>% mutate(
+  year = "10") %>% rename(respn = respn10)
+
+sp4 <- socpol %>% select(fips, assn09, assn14) %>% pivot_longer(
+  cols = !fips, 
+  names_to = "year", 
+  names_prefix = "assn", 
+  values_to = "assn")
+
+sp5 <- socpol %>% select(fips, pc1s_nonprofitsocialindustries, pc2s_publicvoiceparticipation) %>% mutate(year = NA)
+  
+# Join data
+socpol <- purrr::reduce(list(sp1, sp2, sp3, sp4, sp5), dplyr::full_join, by = c("fips", "year")) %>% arrange(year, fips) 
+
+socpol <- socpol %>% mutate(
+  year = str_pad(year, side = "left", pad = "0" , width = 3), 
+  year = str_pad(year, side = "left", pad = "2", width = 4))
+
+rm(sp1, sp2, sp3, sp4, sp5)
+
+# Pivot longer
+socpol <- socpol %>% pivot_longer(
+  cols = !c(fips, year), 
+  values_to = "value", 
+  names_to = "variable_name") %>% filter(!is.na(value)) 
+
+# Add topic area
+socpol <- socpol %>% mutate(
+  topic_area = case_when(
+    variable_name=="pvote" |
+      variable_name=="respn"| 
+      variable_name=="pc2s_publicvoiceparticipation" ~ "Population", 
+    variable_name=="nccs" |
+      variable_name=="assn" | 
+      variable_name=="pc1s_nonprofitsocialindustries" ~ "Community Resources"))
+
+
+```
+
+## Bind all data and add county and state names
+
+```{r}
+
+# Bind data
+community_wealth <- bind_rows(built, cultural, financial, human, natural, socpol)
+
+# Add state and county name
+fips_codes <- fips_codes %>% select(state_code, county_code, everything()) %>% unite("fips", state_code:county_code, sep = "") %>% select(-state) %>% rename(county_name = county)
+
+community_wealth <- left_join(community_wealth, fips_codes)
+
+# Add category
+community_wealth <- community_wealth %>% mutate(
+  category = case_when(
+    topic_area=="Agriculture" | 
+      topic_area=="Community Resources" | 
+      topic_area=="Financial" |
+      topic_area=="Infrastructure" | 
+      topic_area=="Natural" |
+      topic_area=="Population" ~ "Community Characteristics", 
+   topic_area=="Food Insecurity" ~ "Food Access", 
+   topic_area=="Food Processors" ~ "Processing & Distribution"))
+
+# Re-order data
+community_wealth <- community_wealth %>% select(
+  fips, county_name, state_name, category, topic_area, year, variable_name, value)
+
+write_csv(community_wealth, "community_wealth.csv")
+```

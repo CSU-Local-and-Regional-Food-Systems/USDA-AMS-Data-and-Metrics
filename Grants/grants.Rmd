@@ -1,0 +1,281 @@
+---
+title: "Grants"
+author: "Allie Bauman"
+date: "9/8/2022"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Create data frame of FIPS codes, county names, and state names
+
+We use 2019 U.S. Census Bureau data (most recent available data), which can be found here: https://www.census.gov/geographies/reference-files/2019/demo/popest/2019-fips.html
+
+
+```{r fips}
+
+library(tidyverse)
+library(haven)
+library(janitor)
+
+# Import FIPS data containing FIPS code, county name and state name
+geocodes <- read_csv("all-geocodes-v2019.csv", 
+                     show_col_types = FALSE)
+
+# Add the state and county code to get a fips code
+geocodes <- geocodes %>% unite("fips", state_code_fips, county_code_fips, sep = "", remove = FALSE) 
+
+# create a new column for state name
+state <- geocodes %>% filter(summary_level=="040") %>% select(state_code_fips, area_name) %>% rename(state_name = area_name)
+
+# join state name to the fips codes, drop Puerto Rico, only keep county level data and drop state and city data, only keep columns of interest 
+fips <- left_join(geocodes, state) %>% filter(state_code_fips != 72 & summary_level=="050") %>% select(fips, area_name, state_name) %>% rename(county_name_long = area_name)
+rm(state, geocodes)
+
+# each county_name as the county name followed by "county". Other data sets only have the county name, not followed by county. Separate the data so it only says the county name
+fips <- fips %>% mutate(county_name = str_remove_all(county_name_long, " County"))
+fips <- fips %>% select(fips, county_name_long, county_name, state_name)
+```           
+
+## Food Banks
+
+We use 2018 food bank data from the Food Environment Atlas, available at: https://www.ers.usda.gov/data-products/food-environment-atlas/data-access-and-documentation-downloads/#Current%20Version
+
+Food Bank data is on the "Assistance" tab and the variable is called "food_banks18". It is a count of the number of food banks in the county. 
+
+There are 2 more counties in this data set than in the fips data set. All of these counties have changed fips codes and will be removed from the food data frame. Counties include:
+
+* 02158 (Kusilvak Census Area, AK (FIPS code=02158).-Effective July 1, 2015, Wade Hampton Census Area (FIPS code=02270) was renamed Kusilvak Census Area and assigned a new FIPS code)
+* 46102 (South Dakota, 2015: Shannon County (FIPS 46113) is renamed to Oglala
+Lakota County (FIPS 46102) as of May 1st, 2015.
+Action: replace FIPS code 46102 with the old code 46113)
+
+For more information on the counties that have changed names see: 
+
+https://www.ddorn.net/data/FIPS_County_Code_Changes.pdf
+https://www.cdc.gov/nchs/nvss/bridged_race/county_geography-_changes2015.pdf
+
+```{r food_banks}
+
+# import food bank data
+food_bank <- read_csv("assistance_food_environment_atlas.csv", 
+                      show_col_types = FALSE) %>% clean_names() %>% select(fips, food_banks18)
+
+# drop two counties that have changed names
+food_bank <- left_join(fips, food_bank)
+```
+
+## Food desert data
+
+We use food desert data from USDA ERS Food Access Research Atlas to define food desert, available at: https://www.ers.usda.gov/data-products/food-access-research-atlas/
+
+All data is from 2019. In this data set there are 4 different definitions of food desert:
+
+1. Low income and low access tract measured at 1 mile for urban areas and 10 miles for rural areas
+2. Low income and low access tract measured at 1/2 mile for urban areas and 10 miles for rural areas
+3. Low income and low access tract measured at 1 mile for urban areas and 20 miles for rural areas
+4. Low income and low access tract using vehicle access or low income and low access tract measured at 20 miles
+
+Low-income is defined as poverty rate ≥ 20% or median family income < 80 % of either the state or metropolitan-area median income. 
+
+The data has census tract, county and state. I add fips and then add new columns for the number of food deserts in a county. 
+
+(This is no longer relevant for the 2019 data)
+There are 4 counties missing in the food bank data set. All are from Alaska and due to changes county names. We include these counties in the data frame and populate with NA. Counties include:
+
+* 02195 Petersburg Borough, AK has no data in the food desert data set. We make this fips code = NA. There were some recent changes to this county definition, so that is likely why data was not available. 
+
+* 02198 Prince of Wales-Hyder Census Area, AK has no data in the food desert data set. We make this fips code = NA. There were some recent changes to this county definition, so that is likely why data was not available.
+
+* 02275 Wrangell City and Borough. Effective June 1, 2008, Wrangell City and Borough was created from part of Wrangell-Petersburg Census Area (FIPS code = 02280) and part of Prince of Wales-Outer Ketchikan Census Area(FIPS code = 02201).
+
+There is one county that has data but was assinged a new name/fips code in 2015. The county name in the food desert data frame is changed to reflect the new name.  
+
+(This is no longer relevant, from the 2015 data set. Wade Hampton nor Kusilvak are in the 2019 food desert data)
+* 02158 is in FIPS but not in food desert (Kusilvak Census Area, AK (FIPS code=02158)-Effective July 1, 2015, Wade Hampton Census Area (FIPS code=02270) was renamed Kusilvak Census Area and assigned a new FIPS code). 
+  * Wade Hampton is in the food desert data, change this county to be called Kusilvak 
+  
+In the FIPS data are two counties called LaSalle County: one in Texas, called La Salle County and one in Illinois called LaSalle. This is not an issue with the 2019 data, but might need to be changed if data is updated. 
+
+```{r food_desert}
+
+# read in data
+food_desert <- read_csv("food_desert_2019.csv") %>% select(CensusTract:County, LILATracts_1And10:LILATracts_Vehicle) %>% clean_names()
+
+# Dona Ana was not read in correctly due to tilde, change to Dona Ana in food desert data and La Salle needs a space added to they can be correctly matched with the FIPS data set
+food_desert <- food_desert %>% mutate(
+  county = recode(county, "DoÃ±a Ana County" = "Doña Ana County")) 
+
+# Change column names in food desert data frame so we can join with fips data frame
+food_desert <- food_desert %>% rename(county_name_long = county, state_name = state)
+
+#  Join fips data to add fips code
+food_desert <- left_join(food_desert, fips) %>% select(census_tract, fips, state_name:lila_tracts_vehicle)
+
+# Create new variables for the number of food deserts per county
+food_desert <- food_desert %>% group_by(fips) %>% summarise(
+  food_desert_1and10 = sum(lila_tracts_1and10), 
+  food_desert_half_and10 = sum(lila_tracts_half_and10), 
+  food_desert_1and20 = sum(lila_tracts_1and20), 
+  food_desert_vehicle = sum(lila_tracts_vehicle))
+
+```
+
+## Food environment variable from Robert Wood Johnson Foundation
+
+We use the food environment index created by the Robert Wood Johnson Foundation: https://www.countyhealthrankings.org/explore-health-rankings/measures-data-sources/county-health-rankings-model/health-factors/health-behaviors/diet-exercise/food-environment-index
+
+The County Health Rankings measure of the food environment accounts for both proximity to healthy foods and income. This measure includes access to healthy foods by considering the distance an individual lives from a grocery store or supermarket, locations for health food purchases in most communities, and the inability to access healthy food because of cost barriers.
+
+National data is downloaded from here: 
+https://www.countyhealthrankings.org/explore-health-rankings/rankings-data-documentation
+
+```{r food_environment_RWJ}
+
+# read in data
+rwj <- read_csv("RWJ_2020.csv", 
+                col_types = cols(
+                  `5-digit FIPS Code` = col_character(), 
+                  `Food environment index raw value` = col_double()))
+
+# rename columns and food environment index only
+rwj <- rwj %>% select(`5-digit FIPS Code`, `Food environment index raw value`) %>% rename(
+  fips = `5-digit FIPS Code`, 
+  rwj_food_environment_index = `Food environment index raw value`)
+
+# add a leading 0 to make FIPS 5 digits
+rwj <- rwj %>% mutate(
+  fips = str_pad(fips, 5, side = "left", pad = "0"))
+
+```
+
+## Direct and Intermediated farm sales per capita, 2017
+
+Data on direct and intermediated sales are taken from a data set compiled by one of Becca's students. The variables that I use are called: 
+
+* Total value-added, retail, and intermediated sales, 2017 
+* Total value-added, retail, and/or direct-to-consumer sales, 2017 
+  + Units are in dollars (county total)
+  + Data from the USDA Census of Agriculture 
+  + All data in this data set is by FIPS code 
+
+Data coding: 
+
+* 888888	Data withheld to maintain confidentiality 	(D) on USDA Census 
+* 999999	Data missing or not provided for this entry	#N/A or blank 
+
+I convert all missing/withheld observations to NA. 
+
+To get direct and intermediated sales per capita, we use 2017 population data from the U.S. Census, available at: https://www.census.gov/data/tables/time-series/demo/popest/2010s-counties-total.html 
+
+Suggested citation:
+
+Irish, A, Clark, JK, Jablonski, BBR, Inwood, S, Freedgood, J. (2020). Value-Added Dataset by County [Datafile]. 
+
+```{r}
+
+# Import data, convert observations with 888888 or 99999 to NA and convert to numeric
+direct_intermediated_sales <- read_csv("Value-Added Data_Compiled_2020_05_04.csv", 
+                                       na = c("888888", "999999", "(Z)"), 
+                                       col_types = cols(
+                                         `Sales_ValAdd-DTC_Tot2017` = col_double(), 
+                                         `Sales_ValAdd-InterMed_Tot2017` = col_double())) 
+
+# Keep only variables of interest and rename
+direct_intermediated_sales <- direct_intermediated_sales %>% select(
+  FIPS, `Sales_ValAdd-DTC_Tot2017`, `Sales_ValAdd-InterMed_Tot2017`) %>% 
+  rename(fips = FIPS, 
+         direct_sales_17 = `Sales_ValAdd-DTC_Tot2017`, 
+         intermediated_sales_17 = `Sales_ValAdd-InterMed_Tot2017`)
+
+# Import population data to compute sales per capita (might need to change code so filter(sumlev=="050) if column is imported as a character vector)
+population_2017 <- read_csv("co-est2017-alldata.csv") %>% clean_names() %>% filter(sumlev==50) %>% select(sumlev:ctyname, popestimate2017) 
+
+# Combine state and county codes to create a FIPS code
+population_2017 <- population_2017 %>% mutate(
+  state_fips = str_pad(state, 2, side = "left", pad = "0"),
+  county_fips = str_pad(county, 3, side = "left", pad = "0")) %>% 
+  unite("fips", state_fips, county_fips, remove = FALSE, sep = "") %>%
+  select(fips, popestimate2017)
+
+# Join population data to direct and intermediated sales data and compute sales per capita and keep only sales per capita variables 
+direct_intermediated_sales <- left_join(direct_intermediated_sales, population_2017)
+
+direct_intermediated_sales <- direct_intermediated_sales %>% mutate(
+  direct_sales_17_per_capita = direct_sales_17/popestimate2017, 
+  intermediated_sales_17_per_capita = intermediated_sales_17/popestimate2017) %>% select(
+    fips, direct_sales_17_per_capita, intermediated_sales_17_per_capita)
+
+```
+
+# Combine all food environment data 
+
+## Combine into one data frame
+
+```{r}
+
+# Join all data
+grants <- left_join(food_bank, food_desert) %>% 
+  left_join(rwj) %>% left_join(direct_intermediated_sales)
+  
+# Make data long 
+library(tidycensus)
+
+# Import data, remove county/state and will add in later to make sure consistent with other files and data we don't need
+grants <- grants %>% select(!c(
+  county_name_long, county_name, state_name))
+
+# Remove year from column names
+grants <- grants %>% rename(
+  food_banks = food_banks18, 
+  direct_sales_per_capita = direct_sales_17_per_capita, 
+  intermediated_sales_per_capita = intermediated_sales_17_per_capita)
+
+# Pivot longer
+grants <- grants %>% pivot_longer(
+  !fips, 
+  names_to = "variable_name", 
+  values_to = "value")
+
+# Add in year data
+grants <- grants %>% mutate(
+  year = case_when(
+    variable_name=="food_banks" ~ "2018", 
+    variable_name=="food_desert_1and10" ~ "2019",
+    variable_name=="food_desert_half_and10" ~ "2019",
+    variable_name=="food_desert_1and20" ~ "2019",
+    variable_name=="food_desert_vehicle" ~ "2019",
+    variable_name=="rwj_food_environment_index" ~ "2020",
+    variable_name=="direct_sales_per_capita" ~ "2017", 
+    variable_name=="intermediated_sales_per_capita" ~ "2017"))
+
+# Add state and county name
+fips_codes <- tidycensus::fips_codes %>% select(state_code, county_code, everything()) %>% unite("fips", state_code:county_code, sep = "") %>% select(-state) %>% rename(county_name = county)
+
+grants <- left_join(grants, fips_codes)
+
+# Add in category and topic area and reorder data
+grants <- grants %>% mutate(
+  category = case_when(
+    variable_name=="food_banks" | variable_name=="food_desert_1and10" |
+      variable_name=="food_desert_half_and10" | variable_name=="food_desert_1and20" | 
+      variable_name=="food_desert_vehicle" ~ "Food Access",
+    variable_name=="rwj_food_environment_index" ~ "Community Characteristics", 
+    variable_name=="direct_sales_per_capita" ~ "Food Retail", 
+    variable_name=="intermediated_sales_per_capita" ~ "Food Retail"), 
+  topic_area = case_when(
+    category=="Food Access" ~ "Food Insecurity",
+    variable_name=="rwj_food_environment_index" ~ "Population", 
+    variable_name=="direct_sales_per_capita" ~ "General DTC", 
+    variable_name=="intermediated_sales_per_capita" ~ "General Intermediated")) %>% select(
+  fips, county_name, state_name, category, topic_area, year, variable_name, value)
+
+# Drop observations with NA
+grants <- grants %>% filter(!is.na(value))
+
+write_csv(grants, "grants.csv")
+
+```
