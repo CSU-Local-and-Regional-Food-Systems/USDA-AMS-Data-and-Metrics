@@ -21,7 +21,7 @@ We will accept suggestions of data to add to our data repository and website. Pl
 
 This is not an active code base and we are not accepting contributions to the code. The code is made available for you to use in your own work if it is helpful. 
 
-The original data sets used in this code can be found in our [FAME Dropbox folder](https://www.dropbox.com/home/Food%20and%20Agriculture%20Mapper%20and%20Explorer%20). Links and description of the data are provided in the RMarkdown files. Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in this folder.
+The original data sets used in this code can be found in our [FAME Dropbox folder](https://www.dropbox.com/scl/fo/zpxmg4ka2j7iol1bxrtsn/h?dl=0&rlkey=vshhwvzb2ukpu9dvn06z14o5x). Links and description of the data are provided in the RMarkdown files. Additional data from USDA Food and Nutrition Service (FNS), not available publicly elsewhere, is also available in this folder.
 
 
 ## Authors
