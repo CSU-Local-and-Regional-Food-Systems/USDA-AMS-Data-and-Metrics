@@ -21,7 +21,7 @@ https://www.usdalocalfoodportal.com/#directories
 https://www.ams.usda.gov/local-food-directories/csas
 https://www.usdalocalfoodportal.com/fe/fdirectory_farmersmarket/?source=fe&directory=farmersmarket&location=&x=&y=
 
-We only keep data that was updated since 8/30/2020 (based on feedback from AMS). 
+We only keep data that was updated since 8/30/2020 (based on feedback from AMS). If a county has no reported farmers markets or CSAs in this database, our final data will show there are zero in the county. 
 
 ```{r}
 library(tidyverse)
@@ -64,11 +64,27 @@ fm_csa_agg <- fm_csa %>% st_as_sf(coords = c("long", "lat"), crs = 4326, remove 
 fm_csa_agg <- st_join(fm_csa_agg, left = FALSE, counties["geoid"]) %>% as.data.frame() %>% 
   rename(fips = geoid)
 
-# Number per county - Add back in missing counties so we can have NA values for them
+# Number per county - Add back in missing counties so we can have a 0 value for those counties
+
+## Get state level fips codes
 state <- tidycensus::fips_codes %>% unite("fips", c(state_code, county_code), sep = "", remove = FALSE) %>% select(fips, state_code)
 
+## Count number per county
 count <- fm_csa_agg %>% group_by(fips, variable_name) %>% count() %>% rename(value = n)
-count <- full_join(state, count) %>% select(!state_code) %>% filter(!is.na(value))
+
+## We need to have a zero for all counties not listed in the data (not an NA). Create a data frame with two rows per county, one with variable names number_farmers_markets, and the other number_CSAs. 
+state_fm <- state %>% mutate(
+  variable_name = "number_farmers_markets") 
+
+state_csa <- state %>% mutate(
+  variable_name = "number_CSAs")
+
+state_updated <- bind_rows(state_fm, state_csa) %>% arrange(fips)
+
+## Join number per county with county fips data, replace NAs with zero
+count <- full_join(state_updated, count) %>% 
+  select(!state_code) %>% mutate(
+    value = ifelse(is.na(value), 0, value))
 
 fm_csa_county <- count %>% mutate(
   category = "Food Retail",
