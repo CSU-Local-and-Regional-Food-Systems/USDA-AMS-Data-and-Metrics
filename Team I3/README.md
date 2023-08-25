@@ -3,7 +3,7 @@ They are the submissions for the Local Food Economics Data Visualization Challen
 
 ## This folder includes: 
 1. Static Data Visualization (I3_data_visualization.pdf)
-2. Code File (I3_code_file.Rmd)
+2. Code File (I3_code_file.Rmd) and Supplement Data Folder
 3. Index Description One-Pager (I3_one_pager_index_description.pdf)
 4. Presentation (I3_presentation.pdf)
 
