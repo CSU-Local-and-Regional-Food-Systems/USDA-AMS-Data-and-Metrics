@@ -1,0 +1,991 @@
+---
+title: |
+  <center> \LARGE Local Food Economics Data Visualization Challenge </center>
+  <center> \LARGE Food System Strength </center>
+
+author: "Ivy Mackereth, WVU; Chaebeen Yoon, LSU; Huong Nguyen, VT"
+output: pdf_document
+classoption: landscape
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(readr)
+library(readxl)
+library(tidyverse)
+library(writexl)
+library(rquery)
+library(stringr)
+library(ggplot2)
+library(biscale)
+library(sf)
+library(cowplot)
+library(usmap)
+library(maps)
+library(janitor)
+knitr::opts_chunk$set(echo = TRUE, 
+                      message = FALSE,
+                      warning = FALSE, 
+                      out.width="200%",
+                      fig.align="center") 
+```
+
+
+```{r data, include=F}
+## Business Development and Infrastructure Data 
+urlfile<-'https://raw.githubusercontent.com/CSU-Local-and-Regional-Food-Systems/USDA-AMS-Data-and-Metrics/main/Business%20Development%20and%20Infrastructure/business_development_infrastructure.csv'
+bus_dev_inf <- read.csv(url(urlfile))
+```
+
+```{r warehousedata, include=F}
+## Warehouse Data
+storage<- subset(bus_dev_inf, topic_area == "Storage")
+
+private_warehouse <- subset(storage, by = "private_semi_private_refrigerated_warehouses")
+public_warehouse <- subset(storage, by = "public_refrigerated_warehouses")
+
+pub_warehouse = public_warehouse[-c(2, 4, 5, 7)]
+private_warehouse = private_warehouse[-c(2, 4, 5, 7)]
+
+colnames(pub_warehouse)[4]<-"public"
+colnames(private_warehouse)[4]<-"private"
+storage <- natural_join(pub_warehouse, private_warehouse, by = "fips", jointype = "FULL")
+
+storage <- storage %>% relocate(state_name, .after = fips)
+storage <- storage %>% relocate(private, .after = public)
+```
+
+```{r institutions, include=F}
+## Institutions
+institutions<- subset(bus_dev_inf, topic_area == "Institutions")
+
+institutions = institutions[-c(4,5,7)]
+colnames(institutions)[5]<-"insitutions"
+institutions = subset(institutions, year == "2022")
+```
+
+```{r foodhubs, include=F}
+food_hubs<- subset(bus_dev_inf, topic_area == "Food hubs")
+food_hubs = food_hubs[-c(4,5,7)]
+```
+
+```{r meat, include=F}
+meat_poultry<- subset(bus_dev_inf, topic_area == "Meat and Poultry")
+meat_poultry = meat_poultry[-c(4,5,7)]
+colnames(meat_poultry)[5]<- "num_meat_processors"
+
+meat_poultry = meat_poultry %>% filter(!is.na(county_name))
+meat_poultry$fips = as.numeric(meat_poultry$fips)
+meat_poultry = meat_poultry %>% 
+  mutate(fips = sprintf("%05d", fips))
+#meat_poultry[is.na(meat_poultry)]<-0
+```
+
+```{r labor, include=F}
+urlfile<-'https://raw.githubusercontent.com/CSU-Local-and-Regional-Food-Systems/USDA-AMS-Data-and-Metrics/main/Labor/labor.csv'
+labor <- read.csv(url(urlfile))
+
+avg_est_count <- labor %>% 
+  filter(grepl("annual_avg_estabs_count_NAICS",variable_name))
+
+unique(avg_est_count$variable_name)
+```
+
+```{r services, include=F}
+avg_est_count_services <- avg_est_count %>% 
+  filter(grepl(" 7",variable_name))
+
+unique(avg_est_count_services$variable_name)
+
+a <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[1])
+colnames(a)[8] <- "food_drink_serv"
+
+b <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[2])
+colnames(b)[8] <- "special_food_serv"
+
+c <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[3])
+colnames(c)[8] <- "caterers_serv"
+
+d <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[4])
+colnames(d)[8] <- "mobile_food_serv"
+
+e <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[5])
+colnames(e)[8] <- "drinking_alc_serv"
+
+f <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[6])
+colnames(f)[8] <- "eating_places_serv"
+
+g <- subset(avg_est_count_services, variable_name == unique(avg_est_count_services$variable_name)[7])
+colnames(g)[8] <- "full_serv_restaurants_serv"
+
+services <- natural_join(a,b, by= "fips", jointype = "FULL")
+services <- natural_join(services,c, by= "fips", jointype = "FULL")
+services <- natural_join(services,d, by= "fips", jointype = "FULL")
+services <- natural_join(services,e, by= "fips", jointype = "FULL")
+services <- natural_join(services,f, by= "fips", jointype = "FULL")
+services <- natural_join(services,g, by= "fips", jointype = "FULL")
+
+services = services[-c(2,11,12)]
+
+services = services %>% relocate(state_name, .after = fips)
+services = services %>% relocate(county_name, .after = state_name)
+services = services %>% relocate(year, .after = last_col())
+
+#services[is.na(services)]<-0
+
+services = services %>% 
+  mutate(total_services = rowSums(across(c(4:10))))
+services = services %>% relocate(year, .after = last_col())
+```
+
+```{r truck, include=F}
+truck_transport <- avg_est_count %>% 
+  filter(grepl(" 48",variable_name))
+
+unique(truck_transport$variable_name)
+truck_transport = truck_transport[-c(4,5,7)]
+
+colnames(truck_transport)[5]<-"total_truck_transport"
+
+truck_transport = truck_transport %>% relocate(state_name, .after = fips)
+truck_transport = truck_transport %>% relocate(county_name, .after = state_name)
+truck_transport = truck_transport %>% relocate(year, .after = last_col())
+
+#truck_transport[is.na(truck_transport)]<-0
+```
+
+```{r warehousing, include=F}
+warehousing <- avg_est_count %>% 
+  filter(grepl(" 49",variable_name))
+
+unique(warehousing$variable_name)
+warehousing=warehousing[-c(4,5,7)]
+
+colnames(warehousing)[5]<-"total_warehousing"
+
+warehousing=warehousing %>% relocate(state_name, .after = fips)
+warehousing=warehousing %>% relocate(county_name, .after = state_name)
+warehousing=warehousing %>% relocate(year, .after = last_col())
+
+#warehousing[is.na(warehousing)]<-0
+```
+
+```{r wholesalers, include=F}
+avg_est_count_whls <- avg_est_count %>% 
+  filter(grepl(" 42",variable_name))
+
+unique(avg_est_count_whls$variable_name)
+
+avg_est_count_whls = avg_est_count_whls %>% 
+  relocate(value, .after = last_col())
+
+a <- subset(avg_est_count_whls, variable_name == unique(avg_est_count_whls$variable_name)[1])
+colnames(a)[8] <- "grocery_whls"
+
+b <- subset(avg_est_count_whls, variable_name == unique(avg_est_count_whls$variable_name)[2])
+colnames(b)[8] <- "farm_product_raw_whls"
+
+c <- subset(avg_est_count_whls, variable_name == unique(avg_est_count_whls$variable_name)[3])
+colnames(c)[8] <- "alcohol_whls"
+
+d<- subset(avg_est_count_whls, variable_name == unique(avg_est_count_whls$variable_name)[4])
+colnames(d)[8] <- "farm_supplies_whls"
+
+wholesalers <- natural_join(a,b, by= "fips", jointype = "FULL")
+wholesalers <- natural_join(wholesalers,c, by= "fips", jointype = "FULL")
+wholesalers <- natural_join(wholesalers,d, by= "fips", jointype = "FULL")
+
+wholesalers = wholesalers[-c(3,8,9)]
+
+wholesalers = wholesalers %>% relocate(state_name, .after = fips)
+wholesalers = wholesalers %>% relocate(county_name, .after = state_name)
+wholesalers = wholesalers %>% relocate(year, .after = last_col())
+
+wholesalers[is.na(wholesalers)]<-0
+
+wholesalers = wholesalers %>% 
+  mutate(total_whls = rowSums(across(c(4:7))))
+wholesalers = wholesalers %>% relocate(year, .after = last_col())
+```
+
+```{r manufacturing, include=F}
+avg_est_count_man <- avg_est_count %>% 
+  filter(grepl(" 3",variable_name))
+
+unique(avg_est_count_man$variable_name)
+
+avg_est_count_man = avg_est_count_man %>% 
+  relocate(value, .after = last_col())
+
+a <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[1])
+colnames(a)[8] <- "food_man"
+
+b <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[2])
+colnames(b)[8] <- "animal_food_man"
+
+c <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[3])
+colnames(c)[8] <- "grain_oilseed_man"
+
+d <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[4])
+colnames(d)[8] <- "sugar_confectionary_man"
+
+e <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[5])
+colnames(e)[8] <- "fruit_veg_man"
+
+f <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[6])
+colnames(f)[8] <- "dairy_man"
+
+g <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[7])
+colnames(g)[8] <- "slaughter_proc_man"
+
+h <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[8])
+colnames(h)[8] <- "seafood_prep_man"
+
+i <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[9])
+colnames(i)[8] <- "bake_tortilla_man"
+
+j <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[10])
+colnames(j)[8] <- "retail_bake_man"
+
+k <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[11])
+colnames(k)[8] <- "other_man"
+
+l <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[12])
+colnames(l)[8] <- "bev_man"
+
+m <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[14])
+colnames(m)[8] <- "pest_agchem_man"
+
+n <- subset(avg_est_count_man, variable_name == unique(avg_est_count_man$variable_name)[15])
+colnames(n)[8] <- "ag_implement_man"
+
+manufacturing <- natural_join(a,b, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,c, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,d, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,e, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,f, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,g, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,h, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,i, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,j, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,k, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,l, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,m, by= "fips", jointype = "FULL")
+manufacturing <- natural_join(manufacturing,n, by= "fips", jointype = "FULL")
+
+manufacturing = manufacturing[-c(5,18,19)]
+
+manufacturing = manufacturing %>% relocate(state_name, .after = fips)
+manufacturing = manufacturing %>% relocate(county_name, .after = state_name)
+manufacturing = manufacturing %>% relocate(year, .after = last_col())
+
+manufacturing = manufacturing %>% filter(!is.na(county_name))
+
+manufacturing[is.na(manufacturing)]<-0
+
+manufacturing = manufacturing %>% 
+  mutate(total_manufacturing = rowSums(across(c(4:17))))
+manufacturing = manufacturing %>% relocate(year, .after = last_col())
+```
+
+```{r production, include=F}
+avg_est_count_prod <- avg_est_count %>% 
+  filter(grepl(" 11",variable_name))
+
+unique(avg_est_count_prod$variable_name)
+
+avg_est_count_prod = avg_est_count_prod %>% 
+  relocate(value, .after = last_col())
+
+a <- subset(avg_est_count_prod, variable_name == unique(avg_est_count_prod$variable_name)[1])
+colnames(a)[8] <- "crop_prod"
+
+b <- subset(avg_est_count_prod, variable_name == unique(avg_est_count_prod$variable_name)[2])
+colnames(b)[8] <- "animal_aqua_prod"
+
+c <- subset(avg_est_count_prod, variable_name == unique(avg_est_count_prod$variable_name)[3])
+colnames(c)[8] <- "fish_hunt_trap_prod"
+
+d<- subset(avg_est_count_prod, variable_name == unique(avg_est_count_prod$variable_name)[4])
+colnames(d)[8] <- "ag_forest_prod"
+
+production <- natural_join(a,b, by= "fips", jointype = "FULL")
+production <- natural_join(production,c, by= "fips", jointype = "FULL")
+production <- natural_join(production,d, by= "fips", jointype = "FULL")
+
+production = production[-c(3,8,9)]
+
+production = production %>% relocate(state_name, .after = fips)
+production = production %>% relocate(county_name, .after = state_name)
+production = production %>% relocate(year, .after = last_col())
+
+production = production %>% filter(!is.na(county_name))
+
+production[is.na(production)]<-0
+
+production = production %>% 
+  mutate(total_production = rowSums(across(c(4:7))))
+production = production %>% relocate(year, .after = last_col())
+```
+
+```{r stores, include=F}
+avg_est_count_stores <- avg_est_count %>% 
+  filter(grepl("stores",variable_name))
+
+(unique(avg_est_count_stores$variable_name))
+
+a <- subset(avg_est_count_stores, variable_name == unique(avg_est_count_stores$variable_name)[1])
+colnames(a)[8] <- "food_bev_store"
+
+b <- subset(avg_est_count_stores, variable_name == unique(avg_est_count_stores$variable_name)[2])
+colnames(b)[8] <- "grocery_store"
+
+c <- subset(avg_est_count_stores, variable_name == unique(avg_est_count_stores$variable_name)[3])
+colnames(c)[8] <- "supermarkets_store"
+
+d<- subset(avg_est_count_stores, variable_name == unique(avg_est_count_stores$variable_name)[4])
+colnames(d)[8] <- "convenience_store"
+
+e <- subset(avg_est_count_stores, variable_name == unique(avg_est_count_stores$variable_name)[5])
+colnames(e)[8] <- "specialty_store"
+
+stores <- natural_join(a,b, by= "fips", jointype = "FULL")
+stores <- natural_join(stores,c, by= "fips", jointype = "FULL")
+stores <- natural_join(stores,d, by= "fips", jointype = "FULL")
+stores <- natural_join(stores,e, by= "fips", jointype = "FULL")
+
+stores = stores[-c(2,9,10)]
+
+stores = stores %>% relocate(state_name, .after = fips)
+stores = stores %>% relocate(county_name, .after = state_name)
+stores = stores %>% relocate(year, .after = last_col())
+
+stores = stores %>% filter(!is.na(county_name))
+stores[is.na(stores)]<-0
+
+stores = stores %>% mutate(total_stores = rowSums(across(c(4:8))))
+stores = stores %>% relocate(year, .after = last_col())
+```
+
+```{r estcount, include=F}
+labor_full <- natural_join(stores,manufacturing, by = "fips", jointype = "FULL")
+labor_full <- natural_join(labor_full,production, by = "fips", jointype = "FULL")
+labor_full <- natural_join(labor_full,wholesalers, by = "fips", jointype = "FULL")
+labor_full <- natural_join(labor_full,truck_transport, by = "fips", jointype = "FULL")
+labor_full <- natural_join(labor_full,warehousing, by = "fips", jointype = "FULL")
+labor_full <- natural_join(labor_full,services, by = "fips", jointype = "FULL")
+
+labor_full = labor_full %>% relocate(state_name, .after = fips)
+labor_full = labor_full %>% relocate(county_name, .after = state_name)
+labor_full = labor_full %>% relocate(year, .after = last_col())
+
+labor_full=labor_full[-c(3147:3227),]
+labor_full=labor_full[-c(1:53),]
+
+est_count = labor_full %>% 
+  mutate(fips = sprintf("%05d", fips))
+#est_count[is.na(est_count)]<-0
+```
+
+```{r primefarmland, include=F}
+urlfile<-'https://raw.githubusercontent.com/CSU-Local-and-Regional-Food-Systems/USDA-AMS-Data-and-Metrics/main/Indicators%20of%20Community%20Wealth/community_wealth.csv'
+community_wealth <- read.csv(url(urlfile))
+
+unique(community_wealth$variable_name)
+
+prime_farmland <- subset(community_wealth, variable_name == "prime_farmland")
+prime_farmland = prime_farmland %>% mutate(fips = sprintf("%05d", fips))
+prime_farmland$fips = as.numeric(prime_farmland$fips)
+prime_farmland = prime_farmland %>% filter(!is.na(county_name))
+prime_farmland = prime_farmland[-c(4,5,7)]
+colnames(prime_farmland)[5]<-"prime_farmland"
+prime_farmland = prime_farmland %>% relocate(year, .after = last_col())
+
+prime_farmland = prime_farmland %>% 
+  mutate(fips = sprintf("%05d", fips))
+```
+
+```{r county_pop, include=F}
+county_pop <- read_csv("Supplement Data/County Population/county_pop.csv", show_col_types = FALSE)
+county_pop[c('county','state')] <- str_split_fixed(county_pop$GeoName, ', ', 2)
+county_pop = county_pop[-c(2)]
+colnames(county_pop)[2]<-"county_pop"
+colnames(county_pop)[1]<-"fips"
+colnames(county_pop)[3]<-"county_name"
+
+county_pop = county_pop %>%
+  filter(!is.na(county_pop))
+
+county_pop$county_pop <- as.numeric(county_pop$county_pop)
+county_pop = county_pop %>% 
+  filter(!is.na(county_pop)) %>%
+  mutate(fips = as.numeric(fips)) %>%
+  mutate(fips = sprintf("%05d", fips))
+
+county_pop_added <- read_csv("Supplement Data/County Population/county_pop_added.csv", show_col_types = F) %>%
+  mutate(fips = as.numeric(fips)) %>%
+  mutate(fips = sprintf("%05d", fips)) 
+  
+names(county_pop_added) <- c('fips', 'county_pop', 'county_name', 'state')
+
+county_pop <- county_pop %>%
+  rbind(county_pop_added) 
+
+county_pop$county_name  <- str_to_title(county_pop$county_name)
+county_pop$county_name <- str_trim(county_pop$county_name)
+
+aggregated_counties <- c('15901', '51901', '51903', '51907', '51911', '51913',
+                         '51918', '51919', '51921', '51923', '51929', '51931',
+                         '51933', '51939', '51941', '51942', '51944', '51945',
+                         '51947', '51949', '51951', '51953', '51955', '51958')
+county_pop <- county_pop %>%
+  filter(!fips %in% all_of(aggregated_counties)) # not filter those fips code in the aggregated_counties 
+```
+
+```{r datafull, include=F}
+data <- est_count %>%
+  select(-year) %>%
+#  mutate(fips = sprintf("%05d", fips)) %>%
+  full_join(meat_poultry, by = c("fips", "state_name", "county_name"))
+
+data = data %>% 
+  filter(!is.na(state_name)) %>%
+  filter(!is.na(county_name)) %>%
+  select(-`county_name`, -`state_name`)
+
+data_full <- county_pop %>%
+  full_join(data, by = "fips") %>%
+  filter(!is.na(county_pop)) %>%
+  select(fips, state, county_name, num_meat_processors, total_manufacturing, total_production, total_services, total_stores, total_truck_transport, total_warehousing, total_whls, county_pop)
+
+total_per_cap_10000 = data_full %>%
+  mutate(manufacturing = total_manufacturing/county_pop, 
+         production = total_production/county_pop,
+         services = total_services/county_pop,
+         stores = total_stores/county_pop,
+         truck_transport = total_truck_transport/county_pop,
+         warehousing = total_warehousing/county_pop,
+         whls = total_whls/county_pop
+         ) %>%
+  select(-contains("total_"))
+
+prime_farmland = prime_farmland %>%
+  select(fips, prime_farmland) 
+
+production_processing <- total_per_cap_10000 %>%
+  rename(state_name = state) %>%
+  full_join(prime_farmland, by = c("fips"))
+```
+
+
+```{r index_prod_proc, include=F}
+## index prod_proc
+#most data is 2021, except:
+#prime farmland is 2012
+#meat processors is 2022
+
+production_processing = production_processing %>% 
+  mutate(index_meat = case_when(
+    num_meat_processors <= quantile(num_meat_processors, 0.25, na.rm = T) ~ 1,
+    num_meat_processors <= quantile(num_meat_processors, 0.50, na.rm = T) ~ 2,
+    num_meat_processors <= quantile(num_meat_processors, 0.75, na.rm = T) ~ 3,
+    num_meat_processors > quantile(num_meat_processors, 0.75, na.rm = T) ~ 4),
+  index_man = case_when(
+    manufacturing <= quantile(manufacturing, 0.25, na.rm = T) ~ 1,
+    manufacturing <= quantile(manufacturing, 0.50, na.rm = T) ~ 2,
+    manufacturing <= quantile(manufacturing, 0.75, na.rm = T) ~ 3,
+    manufacturing > quantile(manufacturing, 0.75, na.rm = T) ~ 4),
+  index_prod = case_when(
+    production <= quantile(production, 0.25, na.rm = T) ~ 1,
+    production <= quantile(production, 0.50, na.rm = T) ~ 2,
+    production <= quantile(production, 0.75, na.rm = T) ~ 3,
+    production > quantile(production, 0.75, na.rm = T) ~ 4),
+  index_ware = case_when(
+    warehousing <= quantile(warehousing, 0.25, na.rm = T) ~ 1,
+    warehousing <= quantile(warehousing, 0.50, na.rm = T) ~ 2,
+    warehousing <= quantile(warehousing, 0.75, na.rm = T) ~ 3,
+    warehousing > quantile(warehousing, 0.75, na.rm = T) ~ 4),
+  index_farm = case_when(
+    prime_farmland <= quantile(prime_farmland, 0.25, na.rm = T) ~ 1,
+    prime_farmland <= quantile(prime_farmland, 0.50, na.rm = T) ~ 2,
+    prime_farmland <= quantile(prime_farmland, 0.75, na.rm = T) ~ 3,
+    prime_farmland > quantile(prime_farmland, 0.75, na.rm = T) ~ 4)
+  )
+
+production_processing = production_processing %>%
+  mutate(tot_index = rowSums(across(c(`index_meat`:`index_farm`)), na.rm = T))
+
+production_processing = production_processing %>%
+  mutate(index_pp = round(tot_index/5, digits = 2))
+
+prod_proc_data <- production_processing %>%
+  select(fips, state_name, county_name, index_pp)
+```
+
+
+```{r distribution_consumption, include=F}
+## distribution & consumption
+# all data is 2021
+dist_consumption <- total_per_cap_10000 %>%
+  select(`fips`, `services`:`truck_transport`, `whls`)
+```
+
+
+```{r index_dist_cons, include=F}
+## index dist_cons
+#dist_cons<-read_excel("distribution_consumption_percapita_v2.xlsx")
+
+food_stamp <- read_csv("Supplement Data/Food Stamps/2021.csv", show_col_types = FALSE)
+
+colnames(food_stamp)[1]<-"geo"
+colnames(food_stamp)[2]<-"total_households"
+colnames(food_stamp)[3]<-"food_stamp_households"
+colnames(food_stamp)[4]<-"non_food_stamp_households"
+
+county <- est_count %>%
+  select(fips, county_name, state_name) %>%
+  mutate(fips = as.numeric(fips)) %>%
+  mutate(fips = sprintf("%05d", fips))
+
+food_stamp <- food_stamp %>%
+  select(-`non_food_stamp_households`) %>%
+  separate(geo, into = c("county_name", "state_name"), sep = ", ") %>%
+  left_join(county, by = c("county_name", "state_name")) %>%
+  filter(!is.na(fips))
+  
+food_stamp_data <- food_stamp %>%
+  mutate(YesFoodStampSNAPRate = food_stamp_households/total_households) %>%
+  select(fips, YesFoodStampSNAPRate)
+```
+
+```{r, include=F}
+fi_rate <- read_csv("Supplement Data/Feeding America/2019_2021.csv", show_col_types = FALSE) %>%
+  filter(Year == "2021") %>%
+  select(-`State`) %>%
+  mutate(Fips = as.numeric(Fips)) %>%
+  mutate(Fips = sprintf("%05d", Fips)) %>%
+  rename(fips = Fips)
+
+fi_rate_data <- fi_rate %>%
+  select(-`County`, - `Year`) %>%
+  select(`fips`, `FIRate`, `ChildFIRate`, ) %>%
+  gather(`FIRate`:`ChildFIRate`, key = variables, value = values) %>%
+  mutate(values = as.numeric(gsub("[\\%,]", "", values))) %>%
+  spread(variables, values)
+
+fi_rate_data <- fi_rate_data %>%
+  mutate(FIRate_Individual = FIRate/100, 
+         FIRate_Child = ChildFIRate/100)
+
+fi_rate_data[is.na(fi_rate_data)]<-0
+```
+
+```{r, include=F}
+cost_per_meal_data <- read_csv("Supplement Data/Feeding America/2019_2021.csv", show_col_types = FALSE) %>%
+  filter(Year == "2021") %>%
+  select(-`State`) %>%
+  mutate(Fips = as.numeric(Fips)) %>%
+  mutate(Fips = sprintf("%05d", Fips)) %>%
+  rename(fips = Fips) %>%
+  select(fips, `CostPerMeal`) %>%
+  mutate(CostPerMeal = as.numeric(gsub("[\\$,]", "", CostPerMeal)))
+``` 
+  
+  
+```{r snapretailer, include=F}
+urlfile<-'https://www.fns.usda.gov/sites/default/files/resource-files/Historical%20SNAP%20Retailer%20Locator%20Data-20221231.zip'
+tmp <- tempfile()
+download.file(urlfile, tmp, mode = "wb")
+snap_retailer <- read_csv(unzip(tmp,"Historical SNAP Retailer Locator Data.csv"), show_col_types = FALSE)
+snap_retailer <- snap_retailer[c(8,11,2,3,9,10,12,13,14,15)]
+
+SNAPRetailers <- snap_retailer %>%
+  separate(`Authorization Date`, into = c("Authorization.Date", "Authorization.Month", "Authorization.Year"), sep = "/") %>%
+  separate(`End Date`, into = c("End.Date", "End.Month", "End.Year"), sep = "/") %>%
+  filter(Authorization.Year != "2022") %>%
+  filter(is.na(End.Year) | End.Year %in% c("2021", "2022")) %>%
+  mutate(Combined = paste(State, County, sep = ", ")) %>%
+  group_by(Combined) %>%
+  mutate(Count = n()) %>%
+  ungroup() %>%
+  select(Combined, Count) %>%
+  distinct(Combined, .keep_all = TRUE)
+
+SNAPRetailers$State <- sub(",.*", "", SNAPRetailers$Combined)
+SNAPRetailers$County <- sub(".*,", "", SNAPRetailers$Combined)
+SNAPRetailers <- SNAPRetailers %>%
+  select(State, County, Count) %>%
+  rename(state = State, county_name = County)
+
+SNAPRetailers$state <- str_trim(SNAPRetailers$state)
+SNAPRetailers$county_name  <- str_to_title(SNAPRetailers$county_name)
+SNAPRetailers$county_name <- str_trim(SNAPRetailers$county_name)
+
+SNAPRetailers_data <- SNAPRetailers %>%
+  mutate(
+    state = case_when(
+      state == "AK*" ~ "AK",
+      state == "CO*" ~ "CO",
+      state == "NM*" ~ "NM",
+      state == "AZ*" ~ "AZ",
+      state == "WI*" ~ "WI",
+      state == "SD*" ~ "SD",
+      state == "SD*" ~ "SD",
+      state == "AZ*" ~ "AZ",
+      TRUE ~ state),
+    county_name = case_when(
+    state =='VA' & county_name == 'Norton' ~ 'Norton City',
+    state =='AK' & county_name == 'Dillingham' ~ 'Dillingham Census Area',
+    state =='AK' & county_name == 'Juneau' ~ 'Juneau City And Borough',
+    state =='VA' & county_name == 'Covington' ~ 'Covington City',
+    state =='AK' & county_name == 'Ketchikan Gateway' ~ 'Ketchikan Gateway Borough',
+    state =='VA' & county_name == 'Radford' ~ 'Radford City',
+    state =='AK' & county_name == 'North Slope' ~ 'North Slope Borough',
+    state =='MO' & county_name == 'Sainte Genevieve' ~ 'Ste. Genevieve',
+    state =='MO' & county_name == 'St Clair' ~ 'St. Clair',
+    state =='LA' & county_name == 'St James' ~ 'St. James',
+    state =='VA' & county_name == 'Southampton' ~ 'Southampton County',
+    state =='VA' & county_name == 'Williamsburg' ~ 'Williamsburg City',
+    state =='VA' & county_name == 'Galax' ~ 'Galax City',
+    state =='AK' & county_name == 'Northwest Arctic' ~ 'Northwest Arctic Borough',
+    state =='TN' & county_name == 'De Kalb' ~ 'Dekalb',
+    state =='AK' & county_name == 'Kusilvak' ~ 'Kusilvak Census Area',
+    state =='IA' & county_name == 'O Brien' ~ "O'brien",
+    state =='VA' & county_name == 'Rockbridge' ~ 'Rockbridge County',
+    state =='VA' & county_name == 'Dinwiddie' ~ 'Dinwiddie County',
+    state =='VA' & county_name == 'Martinsville' ~ 'Martinsville City',
+    state =='VA' & county_name == 'Greensville' ~ 'Greensville County',
+    state =='VA' & county_name == 'Prince George' ~ 'Prince George County',
+    state =='AK' & county_name == 'Nome' ~ 'Nome Census Area',
+    state =='VA' & county_name == 'Colonial Heights' ~ 'Colonial Heights City',
+    state =='AK' & county_name == 'Fairbanks No Star' ~ 'Fairbanks North Star Borough',
+    state =='VA' & county_name == 'Bristol' ~ 'Bristol City',
+    state =='VA' & county_name == 'Salem' ~ 'Salem City',
+    state =='VA' & county_name == 'Waynesboro' ~ 'Waynesboro City',
+    state =='AK' & county_name == 'Yukon Koyukuk' ~ 'Yukon-Koyukuk Census Area',
+    state =='AR' & county_name == 'St Francis' ~ 'St. Francis',
+    state =='IN' & county_name == 'De Kalb' ~ 'Dekalb',
+    state =='VA' & county_name == 'Hopewell' ~ 'Hopewell City',
+    state =='VA' & county_name == 'Staunton' ~ 'Staunton City',
+    state =='KY' & county_name == 'Muhlenburg' ~ 'Muhlenberg',
+    state =='MD' & county_name == 'Queen Annes' ~ "Queen Anne's",
+    state =='VA' & county_name == 'Winchester' ~ 'Winchester City',
+    state =='VA' & county_name == 'Fredericksburg' ~ 'Fredericksburg City',
+    state =='VA' & county_name == 'Carroll' ~ 'Carroll County',
+    state =='AK' & county_name == 'Kenai Peninsula' ~ 'Kenai Peninsula Borough',
+    state =='AK' & county_name == 'Matanuska Susitna' ~ 'Matanuska-Susitna Borough',
+    state =='VI' & county_name == 'Saint Croix' ~ 'St. Croix',
+    state =='VA' & county_name == 'Rockingham' ~ 'Rockingham County',
+    state =='VA' & county_name == 'York' ~ 'York County',
+    state =='LA' & county_name == 'St Charles' ~ 'St. Charles',
+    state =='VA' & county_name == 'James City' ~ 'James City County',
+    state =='AK' & county_name == 'Bethel' ~ 'Bethel Census Area',
+    state =='LA' & county_name == 'St John Baptist' ~ 'St. John The Baptist',
+    state =='VA' & county_name == 'Frederick' ~ 'Frederick County',
+    state =='VA' & county_name == 'Augusta' ~ 'Augusta County',
+    state =='LA' & county_name == 'St Bernard' ~ 'St. Bernard',
+    state =='VA' & county_name == 'Charlottesville' ~ 'Charlottesville City',
+    state =='VA' & county_name == 'Wise' ~ 'Wise County',
+    state =='LA' & county_name == 'St Martin' ~ 'St. Martin',
+    state =='WI' & county_name == 'St Croix' ~ 'St. Croix',
+    state =='NV' & county_name == 'Carson City' ~ 'Carson City (Independent City)',
+    state =='MD' & county_name == 'St Marys' ~ 'St. Marys',
+    state =='LA' & county_name == 'St Mary' ~ 'St. Mary',
+    state =='VA' & county_name == 'Albemarle' ~ 'Albemarle County',
+    state =='VA' & county_name == 'Pittsylvania' ~ 'Pittsylvania County',
+    state =='VA' & county_name == 'Washington' ~ 'Washington',
+    state =='VA' & county_name == 'Campbell' ~ 'Campbell County',
+    state =='VA' & county_name == 'Harrisonburg' ~ 'Harrisonburg City',
+    state =='VA' & county_name == 'Roanoke' ~ 'Roanoke County',
+    state =='MO' & county_name == 'St Francois' ~ 'St. Francois',
+    state =='MI' & county_name == 'St Joseph' ~ 'St. Joseph',
+    state =='VA' & county_name == 'Montgomery' ~ 'Montgomery County',
+    state =='VA' & county_name == 'Petersburg' ~ 'Petersburg City',
+    state =='AL' & county_name == 'St Clair' ~ 'St. Clair',
+    state =='VA' & county_name == 'Suffolk' ~ 'Suffolk (Independent City)',
+    state =='IL' & county_name == 'De Kalb' ~ 'Dekalb',
+    state =='VA' & county_name == 'Alexandria' ~ 'Alexandria (Independent City)',
+    state =='VA' & county_name == 'Henry' ~ 'Henry County',
+    state =='VA' & county_name == 'Lynchburg' ~ 'Lynchburg City',
+    state =='VA' & county_name == 'Danville' ~ 'Danville City',
+    state =='IN' & county_name == 'La Porte' ~ 'Laporte',
+    state =='VA' & county_name == 'Spotsylvania' ~ 'Spotsylvania County',
+    state =='VA' & county_name == 'Portsmouth' ~ 'Portsmouth (Independent City)',
+    state =='IL' & county_name == 'La Salle' ~ 'La Salle',
+    state =='LA' & county_name == 'St Landry' ~ 'St. Landry',
+    state =='AK' & county_name == 'Anchorage' ~ 'Anchorage Municipality',
+    state =='NY' & county_name == 'St Lawrence' ~ 'St. Lawrence',
+    state =='HI' & county_name == 'Maui' ~ 'Maui County',
+    state =='VA' & county_name == 'Hampton' ~ 'Hampton (Independent City)',
+    state =='FL' & county_name == 'St Johns' ~ 'St. Johns',
+    state =='VA' & county_name == 'Roanoke City' ~ 'Roanoke (Independent City)',
+    state =='MS' & county_name == 'De Soto' ~ 'De Soto',
+    state =='MN' & county_name == 'St Louis' ~ 'St. Louis',
+    state =='MI' & county_name == 'St Clair' ~ 'St. Clair',
+    state =='VA' & county_name == 'Chesapeake' ~ 'Chesapeake (Independent City)',
+    state =='VA' & county_name == 'Newport News' ~ 'Newport News (Independent City)',
+    state =='LA' & county_name == 'St Tammany' ~ 'St. Tammany',
+    state =='MO' & county_name == 'St Charles' ~ 'St. Charles',
+    state =='VA' & county_name == 'Norfolk' ~ 'Norfolk (Independent City)',
+    state =='VA' & county_name == 'Prince William' ~ 'Prince William County',
+    state =='IN' & county_name == 'St Joseph' ~ 'St. Joseph',
+    state =='FL' & county_name == 'St Lucie' ~ 'St. Lucie',
+    state =='IL' & county_name == 'St Clair' ~ 'St. Clair',
+    state =='VA' & county_name == 'Richmond City' ~ 'Richmond (Independent City)',
+    state =='VA' & county_name == 'Virginia Beach' ~ 'Virginia Beach (Independent City)',
+    state =='MO' & county_name == 'St Louis City' ~ 'St. Louis (Independent City)',
+    state =='VA' & county_name == 'Fairfax' ~ 'Fairfax County',
+    state =='DC' & county_name == 'Dist Of Columbia' ~ 'District Of Columbia',
+    state =='IL' & county_name == 'Du Page' ~ 'Dupage',
+    state =='MD' & county_name == 'Prince Georges' ~ "Prince George's",
+    state =='MO' & county_name == 'St Louis' ~ 'St. Louis',
+    state =='MD' & county_name == 'Baltimore City' ~ 'Baltimore (Independent City)',
+    state =='FL' & county_name == 'Miami Dade' ~ 'Miami-Dade',
+    state =='AK' & county_name == 'Aleutians East' ~ 'Aleutians East Borough',
+    state =='AK' & county_name == 'Aleutians West' ~ 'Aleutians West Census Area',
+    state =='AK' & county_name == 'Bristol Bay' ~ 'Bristol Bay Borough',
+    state =='AK' & county_name == 'Denali' ~ 'Denali Borough',
+    state =='AK' & county_name == 'Haines' ~ 'Haines Borough',
+    state =='AK' & county_name == 'Kodiak Island' ~ 'Kodiak Island Borough',
+    state =='AK' & county_name == 'Lake And Peninsula' ~ 'Lake And Peninsula Borough',
+    state =='AK' & county_name == 'Petersburg' ~ 'Petersburg Borough',
+    state =='AK' & county_name == 'Prince Of Wales Hyder' ~ 'Prince Of Wales-Hyder Census Area',
+    state =='AK' & county_name == 'Prince Wales Cutr' ~ 'Prince Of Wales-Hyder Census Area',
+    state =='AK' & county_name == 'Se Fairbanks' ~ 'Southeast Fairbanks Census Area',
+    state =='AK' & county_name == 'Sitka' ~ 'Sitka City And Borough',
+    state =='AK' & county_name == 'Skagway Hoonah Angoon' ~ 'Skagway Municipality',
+    state =='AK' & county_name == 'Valdez Cordova' ~ 'Chugach Census Area',
+    state =='AK' & county_name == 'Wrangell Peterbrg' ~ 'Wrangell City And Borough',
+    state =='AK' & county_name == 'Yakutat' ~ 'Yakutat City And Borough',
+    state =='ID' & county_name == 'Fremont' ~ 'Fremont (Includes Yellowstone Park)',
+    state =='IL' & county_name == 'La Salle' ~ 'Lasalle',
+    state =='KY' & county_name == 'Null' ~ 'Henderson',
+    state =='LA' & county_name == "La Salle" ~ 'Lasalle',
+    state =='LA' & county_name == 'St Helena' ~ 'St. Helena',
+    state =='MD' & county_name == "St. Marys" ~ "St. Mary's",
+    state =='MO' & county_name == 'De Kalb' ~ 'Dekalb',
+    state =='MS' & county_name == 'Chikasaw' ~ 'Chickasaw',
+    state =='MS' & county_name == 'De Soto' ~ 'Desoto',
+    state =='ND' & county_name == 'La Moure' ~ 'Lamoure',
+    state =='NM' & county_name == 'Dona Ana' ~ 'Doña Ana',
+    state =='SC' & county_name == 'Null' ~ 'Kershaw',
+    state =='TX' & county_name == 'Brisco' ~ 'Briscoe',
+    state =='TX' & county_name == 'De Witt' ~ 'Dewitt',
+    state =='VA' & county_name == 'Alleghany' ~ 'Alleghany County',
+    state =='VA' & county_name == 'Bedford City' ~ 'Bedford',
+    state =='VA' & county_name == 'Berkeley' ~ 'Clarke',
+    state =='VA' & county_name == 'Buena Vista' ~ 'Buena Vista City',
+    state =='VA' & county_name == 'Emporia' ~ 'Emporia City',
+    state =='VA' & county_name == 'Lexington' ~ 'Lexington City',
+    state =='VA' & county_name == 'Washington' ~ 'Washington County',
+    state =='WI' & county_name == 'Lacrosse' ~ 'La Crosse',
+    TRUE ~ county_name),
+    )
+
+# Returns string without leading or trailing white space
+trim <- function (x) gsub("^\\s+|\\s+$", "", x)
+
+SNAPRetailers_data$county_name <- trim(SNAPRetailers_data$county_name) 
+
+county_pop$county_name = str_to_title(county_pop$county_name)
+county_pop$county_name = trim(county_pop$county_name)
+county_pop <- county_pop %>%
+  mutate(state = case_when(
+    state == "AK*" ~ "AK",
+    state == "CO*" ~ "CO",
+    state == "NM*" ~ "NM",
+    state == "SD*" ~ "SD",
+    state == "VA*" ~ "VA",
+    state == "WI*" ~ "WI",
+    state == "AZ*" ~ "AZ",
+    TRUE ~ state
+  ))
+
+SNAPRetailers_data <- SNAPRetailers_data %>%
+  full_join(county_pop, by = c("state", "county_name"))
+
+snap_retailers_data <- SNAPRetailers_data %>%
+  filter(!is.na(fips)) %>%
+  select(fips, Count) %>%
+  mutate(Count = as.numeric(Count)) %>%
+  group_by(fips) %>%
+  summarise(mean = mean(Count), n = n(), na.rm = T) %>%
+  as.data.frame()
+
+snap_retailers_data <- snap_retailers_data %>%
+  mutate(SNAP_Retailers = mean * n)
+```
+
+```{r, include=F}
+dist_cons = dist_consumption %>%
+  left_join(food_stamp_data, by = "fips") %>%
+  left_join(fi_rate_data, by = "fips") %>%
+  left_join(cost_per_meal_data, by = "fips") %>%
+  left_join(snap_retailers_data, by = "fips")
+  
+
+dist_cons = dist_cons %>% 
+  mutate(index_serv = case_when(
+    services <= quantile(services, 0.25, na.rm = T) ~ 1,
+    services <= quantile(services, 0.50, na.rm = T) ~ 2,
+    services <= quantile(services, 0.75, na.rm = T) ~ 3,
+    services > quantile(services, 0.75, na.rm = T) ~ 4),
+  index_store = case_when(
+    stores <= quantile(stores, 0.25, na.rm = T) ~ 1,
+    stores <= quantile(stores, 0.50, na.rm = T) ~ 2,
+    stores <= quantile(stores, 0.75, na.rm = T) ~ 3,
+    stores > quantile(stores, 0.75, na.rm = T) ~ 4),
+  index_truck = case_when(
+    truck_transport <= quantile(truck_transport, 0.25, na.rm = T) ~ 1,
+    truck_transport <= quantile(truck_transport, 0.50, na.rm = T) ~ 2,
+    truck_transport <= quantile(truck_transport, 0.75, na.rm = T) ~ 3,
+    truck_transport > quantile(truck_transport, 0.75, na.rm = T) ~ 4),
+  index_whls = case_when(
+    whls <= quantile(whls, 0.25, na.rm = T) ~ 1,
+    whls <= quantile(whls, 0.50, na.rm = T) ~ 2,
+    whls <= quantile(whls, 0.75, na.rm = T) ~ 3,
+    whls > quantile(whls, 0.75, na.rm = T) ~ 4),
+  index_FI_ind = case_when(
+    FIRate_Individual <= quantile(FIRate_Individual, 0.25, na.rm = T) ~ 4,
+    FIRate_Individual <= quantile(FIRate_Individual, 0.50, na.rm = T) ~ 3,
+    FIRate_Individual <= quantile(FIRate_Individual, 0.75, na.rm = T) ~ 2,
+    FIRate_Individual > quantile(FIRate_Individual, 0.75, na.rm = T) ~ 1),
+  index_FI_child = case_when(
+    FIRate_Child <= quantile(FIRate_Child, 0.25, na.rm = T) ~ 4,
+    FIRate_Child <= quantile(FIRate_Child, 0.50, na.rm = T) ~ 3,
+    FIRate_Child <= quantile(FIRate_Child, 0.75, na.rm = T) ~ 2,
+    FIRate_Child > quantile(FIRate_Child, 0.75, na.rm = T) ~ 1),
+  index_mealcost = case_when(
+    CostPerMeal <= quantile(CostPerMeal, 0.25, na.rm = T) ~ 4,
+    CostPerMeal <= quantile(CostPerMeal, 0.50, na.rm = T) ~ 3,
+    CostPerMeal <= quantile(CostPerMeal, 0.75, na.rm = T) ~ 2,
+    CostPerMeal > quantile(CostPerMeal, 0.75, na.rm = T) ~ 1),
+  index_foodstamp = case_when(
+    YesFoodStampSNAPRate <= quantile(YesFoodStampSNAPRate, 0.25, na.rm = T) ~ 1,
+    YesFoodStampSNAPRate <= quantile(YesFoodStampSNAPRate, 0.50, na.rm = T) ~ 2,
+    YesFoodStampSNAPRate <= quantile(YesFoodStampSNAPRate, 0.75, na.rm = T) ~ 3,
+    YesFoodStampSNAPRate > quantile(YesFoodStampSNAPRate, 0.75, na.rm = T) ~ 4),
+  index_SNAP = case_when(
+    SNAP_Retailers <= quantile(SNAP_Retailers, 0.25, na.rm = T) ~ 1,
+    SNAP_Retailers <= quantile(SNAP_Retailers, 0.50, na.rm = T) ~ 2,
+    SNAP_Retailers <= quantile(SNAP_Retailers, 0.75, na.rm = T) ~ 3,
+    SNAP_Retailers > quantile(SNAP_Retailers, 0.75, na.rm = T) ~ 4)
+  )
+
+dist_cons = dist_cons %>%
+  mutate(tot_index = rowSums(dist_cons %>% select('index_serv', 'index_store', 'index_truck', 'index_whls', 
+                                                  'index_FI_ind', 'index_FI_child', 'index_mealcost',
+                                                  'index_foodstamp', 'index_SNAP'), na.rm = TRUE),
+         index_dc = round(tot_index/9,2)
+         )
+
+dist_cons_data = dist_cons %>%
+  select(fips, index_dc)
+
+index = dist_cons_data %>%
+  full_join(prod_proc_data, by = "fips")
+```
+
+## Bivariate Legend
+
+```{r legend, fig.height = 3, echo = F}
+legend <- bi_legend(pal = "BlueOr",
+                    dim = 4,
+                    xlab = "      Prod. & Proc.",
+                    ylab = "      Dist. & Cons.",
+                    size = 12,
+                    pad_width = .2,
+                    pad_color = "black") + 
+  bi_theme(bg_color = "transparent",
+           base_size = 12)
+
+print(legend) 
+```
+
+## US Bivariate Choropleth Map
+
+```{r usmap, fig.height= 6, echo = F}
+data_biscale <- bi_class(index, x = index_pp, y = index_dc, style = "quantile", dim = 4)
+
+urlfile<-'https://www2.census.gov/geo/tiger/TIGER2021/COUNTY/tl_2021_us_county.zip'
+tmp <- tempfile()
+tmp2 <- tempfile()
+download.file(urlfile, tmp)
+unzip(zipfile = tmp,exdir = tmp2)
+
+us <- read_sf(tmp2) %>%     # data for the map 
+  clean_names() %>%
+  rename(fips = geoid) %>%
+  filter(statefp != "60" & statefp != "66" & statefp != "69" & statefp != "72" &
+           statefp != "74" & statefp != "78" & statefp != "02" & statefp != "15" )
+
+usdata <- left_join(us, data_biscale, by = "fips")
+usmap <- ggplot() +
+  geom_sf(data = usdata, mapping = aes(fill = bi_class), color = "black", size = 0.2, show.legend = F) +
+  bi_scale_fill(pal = "BlueOr", dim = 4) +
+  bi_theme(bg_color = "transparent", base_size = 20) +
+  ggtitle("Food System Strength in the U.S.")
+
+legend <- bi_legend(pal = "BlueOr",
+                    dim = 4,
+                    xlab = "      Prod. & Proc.",
+                    ylab = "      Dist. & Cons.",
+                    size = 8,
+                    pad_width = .2,
+                    pad_color = "black") + 
+  bi_theme(bg_color = "transparent",
+           base_size = 8)
+
+ggdraw() +
+  draw_plot(usmap, 0, 0, 1, 1) +
+  draw_plot(legend, 0.8, 0.15, 0.2, 0.2)
+```
+
+## Appalachian Bivariate Choropleth Map
+
+```{r appalachianmap, fig.height= 8, echo = F}
+urlfile <- 'https://www.arc.gov/wp-content/uploads/2021/11/Appalachian-Counties-Served-by-ARC_2021.xlsx'
+download.file(urlfile, destfile = "/tmp/arc_counties.xlsx")
+arc <- read_excel("/tmp/arc_counties.xlsx", 
+    sheet = "ARC Counties", skip = 4) %>%
+  rename(fips = FIPS, region = STATE, subregion = COUNTY)
+
+
+urlfile<-'https://www2.census.gov/geo/tiger/TIGER2021/STATE/tl_2021_us_state.zip'
+tmp <- tempfile()
+tmp2 <- tempfile()
+download.file(urlfile, tmp)
+unzip(zipfile = tmp,exdir = tmp2)
+
+usstates <- read_sf(tmp2) %>%     # data for the map 
+  clean_names()
+
+arcstate <- c("01", "13", "21", "24", "28", "36", "37", "39", "42", "45", "47", "51", "54", "18", "17")
+arcstates = usstates %>%
+  filter(statefp %in% arcstate)
+
+arcdata = usdata %>%
+  filter(fips %in% arc$fips)
+
+arcmap <- ggplot() +
+  geom_sf(data=arcstates, fill = "grey95", color = "black", show.legend = F) +
+  geom_sf(data = arcdata, mapping = aes(fill = bi_class), color = "black", size = 0.2, show.legend = F) +
+  bi_scale_fill(pal = "BlueOr", dim = 4) +
+  bi_theme(bg_color = "transparent", base_size = 20) +
+  ggtitle("Food System Strength \n in Appalachia")
+
+legend <- bi_legend(pal = "BlueOr",
+                    dim = 4,
+                    xlab = "      Prod. & Proc.",
+                    ylab = "      Dist. & Cons.",
+                    size = 16,
+                    pad_width = .2,
+                    pad_color = "black") + 
+  bi_theme(bg_color = "transparent",
+           base_size = 10)
+
+ggdraw() +
+  draw_plot(arcmap, 0, 0, 0.9, 1) +
+  draw_plot(legend, 0.65, 0.12, 0.2, 0.2)
+```
